@@ -1,0 +1,209 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  ADMIN
+  COORDINATOR
+  EVALUATOR
+}
+
+enum ProgramStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
+enum EventType {
+  TEAM
+  INDIVIDUAL
+}
+
+enum EvaluationMode {
+  MARKS
+  STARS
+}
+
+enum EventStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  DELETED
+}
+
+enum EvaluationStatus {
+  DRAFT
+  SUBMITTED
+}
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  password      String
+  role          Role     @default(EVALUATOR)
+  isActive      Boolean  @default(true)
+  phone         String?
+  organization  String?
+  loginAttempts Int      @default(0)
+  lockedUntil   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  coordinatorAssignments EventCoordinator[]
+  evaluatorAssignments   EventEvaluator[]
+  evaluations            Evaluation[]
+  auditLogs              AuditLog[]
+}
+
+model Program {
+  id          String         @id @default(cuid())
+  name        String
+  description String?
+  venue       String?
+  startDate   DateTime?
+  endDate     DateTime?
+  status      ProgramStatus  @default(ACTIVE)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  events Event[]
+}
+
+model Event {
+  id             String         @id @default(cuid())
+  programId      String
+  name           String
+  description    String?
+  venue          String?
+  eventDate      DateTime?
+  eventType      EventType      @default(TEAM)
+  evaluationMode EvaluationMode @default(MARKS)
+  maxStarRating  Int            @default(5)
+  status         EventStatus    @default(ACTIVE)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  program      Program               @relation(fields: [programId], references: [id], onDelete: Cascade)
+  criteria     EvaluationCriteria[]
+  coordinators EventCoordinator[]
+  evaluators   EventEvaluator[]
+  teams        Team[]
+  participants Participant[]
+  evaluations  Evaluation[]
+}
+
+model EvaluationCriteria {
+  id        String @id @default(cuid())
+  eventId   String
+  name      String
+  maxMarks  Float @default(0)
+  maxStars  Int   @default(5)
+  weightage Float @default(0)
+  order     Int   @default(0)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  scores EvaluationScore[]
+}
+
+model EventCoordinator {
+  id      String @id @default(cuid())
+  eventId String
+  userId  String
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+}
+
+model EventEvaluator {
+  id      String @id @default(cuid())
+  eventId String
+  userId  String
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+}
+
+model Team {
+  id        String   @id @default(cuid())
+  eventId   String
+  name      String
+  college   String?
+  createdAt DateTime @default(now())
+
+  event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  members     Participant[]
+  evaluations Evaluation[]
+}
+
+model Participant {
+  id             String   @id @default(cuid())
+  eventId        String
+  teamId         String?
+  name           String
+  registerNumber String?
+  department     String?
+  college        String?
+  contactNumber  String?
+  email          String?
+  createdAt      DateTime @default(now())
+
+  event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  team        Team?         @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  evaluations Evaluation[]
+}
+
+model Evaluation {
+  id           String           @id @default(cuid())
+  eventId      String
+  teamId       String?
+  participantId String?
+  evaluatorId  String
+  status       EvaluationStatus @default(DRAFT)
+  totalScore   Float            @default(0)
+  comments     String?
+  submittedAt  DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  event       Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  team        Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  participant Participant?       @relation(fields: [participantId], references: [id], onDelete: SetNull)
+  evaluator   User               @relation(fields: [evaluatorId], references: [id], onDelete: Cascade)
+  scores      EvaluationScore[]
+}
+
+model EvaluationScore {
+  id           String  @id @default(cuid())
+  evaluationId String
+  criteriaId   String
+  score        Float   @default(0)
+  starRating   Int     @default(0)
+  comments     String?
+
+  evaluation Evaluation        @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  criteria   EvaluationCriteria @relation(fields: [criteriaId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  details   String?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
