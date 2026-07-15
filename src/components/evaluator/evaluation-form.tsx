@@ -147,7 +147,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit, default
   // Step 3: Evaluation
   const [selectedEntityId, setSelectedEntityId] = useState<string>('');
   const [selectedEntityType, setSelectedEntityType] = useState<'team' | 'participant'>('team');
-  const [scores, setScores] = useState<Record<string, { score: number; starRating: number }>>({});
+  const [scores, setScores] = useState<Record<string, { score: number | string; starRating: number }>>({});
   const [comments, setComments] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -166,7 +166,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit, default
     setEditingEval(initialDraftToEdit);
     setComments(initialDraftToEdit.comments || '');
 
-    const draftScores: Record<string, { score: number; starRating: number }> = {};
+    const draftScores: Record<string, { score: number | string; starRating: number }> = {};
     initialDraftToEdit.scores.forEach((s: any) => {
       draftScores[s.criteriaId] = {
         score: s.score,
@@ -214,7 +214,8 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit, default
   const totalScore = useMemo(() => {
     if (!selectedEvent) return 0;
     return Object.values(scores).reduce((sum, s) => {
-      return sum + (isMarksMode ? s.score : s.starRating);
+      const scoreVal = Number(s.score) || 0;
+      return sum + (isMarksMode ? scoreVal : s.starRating);
     }, 0);
   }, [scores, selectedEvent, isMarksMode]);
 
@@ -311,7 +312,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit, default
       // Don't overwrite draft/existing scores if we are editing an evaluation
       return;
     }
-    const initialScores: Record<string, { score: number; starRating: number }> = {};
+    const initialScores: Record<string, { score: number | string; starRating: number }> = {};
     selectedEvent.criteria.forEach((c) => {
       initialScores[c.id] = { score: 0, starRating: 0 };
     });
@@ -322,7 +323,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit, default
   const loadExistingEval = useCallback(
     (evalItem: ExistingEvaluation) => {
       setEditingEval(evalItem);
-      const newScores: Record<string, { score: number; starRating: number }> = {};
+      const newScores: Record<string, { score: number | string; starRating: number }> = {};
       selectedEvent?.criteria.forEach((c) => {
         const existing = evalItem.scores.find((s) => s.criteriaId === c.id);
         newScores[c.id] = {
@@ -343,7 +344,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit, default
     // Validate for SUBMITTED
     if (status === 'SUBMITTED') {
       const hasAnyScore = Object.values(scores).some(
-        (s) => (isMarksMode && s.score > 0) || (!isMarksMode && s.starRating > 0)
+        (s) => (isMarksMode && Number(s.score) > 0) || (!isMarksMode && s.starRating > 0)
       );
       if (!hasAnyScore) {
         toast.error('Please provide at least one score before submitting');
@@ -355,7 +356,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit, default
     try {
       const scoresArray = selectedEvent!.criteria.map((c) => ({
         criteriaId: c.id,
-        score: scores[c.id]?.score ?? 0,
+        score: Number(scores[c.id]?.score) || 0,
         starRating: scores[c.id]?.starRating ?? 0,
       }));
 
@@ -417,7 +418,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit, default
         setSelectedEntityId('');
         setEditingEval(null);
         setComments('');
-        const resetScores: Record<string, { score: number; starRating: number }> = {};
+        const resetScores: Record<string, { score: number | string; starRating: number }> = {};
         selectedEvent!.criteria.forEach((c) => {
           resetScores[c.id] = { score: 0, starRating: 0 };
         });
@@ -814,7 +815,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit, default
                           {isMarksMode ? (
                             <div className="flex items-center gap-4">
                               <Slider
-                                value={[scores[criterion.id]?.score ?? 0]}
+                                value={[Number(scores[criterion.id]?.score) || 0]}
                                 min={0}
                                 max={criterion.maxMarks || 100}
                                 step={0.5}
@@ -836,15 +837,28 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit, default
                                 step={0.5}
                                 value={scores[criterion.id]?.score ?? 0}
                                 onChange={(e) => {
-                                  const val = Math.min(
-                                    parseFloat(e.target.value) || 0,
+                                  const rawValue = e.target.value;
+                                  if (rawValue === '') {
+                                    setScores((prev) => ({
+                                      ...prev,
+                                      [criterion.id]: {
+                                        ...prev[criterion.id],
+                                        score: '',
+                                      },
+                                    }));
+                                    return;
+                                  }
+                                  let val = parseFloat(rawValue);
+                                  if (isNaN(val)) val = 0;
+                                  const cappedVal = Math.min(
+                                    val,
                                     criterion.maxMarks || 100
                                   );
                                   setScores((prev) => ({
                                     ...prev,
                                     [criterion.id]: {
                                       ...prev[criterion.id],
-                                      score: Math.max(0, val),
+                                      score: Math.max(0, cappedVal),
                                     },
                                   }));
                                 }}
