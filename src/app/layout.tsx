@@ -14,12 +14,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "EventForge - Event Management & Evaluation Platform",
+  title: "Digital Kongu - Event Management & Evaluation Platform",
   description: "A comprehensive platform for managing programs, events, participants, coordinators, and evaluation-based rankings.",
-  keywords: ["EventForge", "event management", "evaluation", "leaderboard"],
-  authors: [{ name: "EventForge Team" }],
+  keywords: ["Digital Kongu", "event management", "evaluation", "leaderboard"],
+  authors: [{ name: "Digital Kongu Team" }],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/logo.svg",
+    shortcut: "/logo.svg",
+    apple: "/logo.svg",
   },
 };
 

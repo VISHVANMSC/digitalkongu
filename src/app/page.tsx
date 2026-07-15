@@ -20,11 +20,14 @@ import {
   ChevronRight,
   Zap,
   FilePenLine,
+  AlertTriangle,
+  RefreshCw,
+  Loader2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { useAuthStore } from '@/store/authStore';
 import { AdminDashboard } from '@/components/admin/admin-dashboard';
 import { ProgramManager } from '@/components/admin/program-manager';
@@ -67,31 +70,14 @@ const evaluatorTabs: { id: EvaluatorTab; label: string; icon: typeof LayoutDashb
   { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
 ];
 
-// Custom hook to handle theme with hydration safety
+// Custom hook to handle theme with hydration safety (forced light theme)
 function useTheme() {
-  const [isDark, setIsDark] = useState(false);
-  const initialized = useRef(false);
+  const isDark = false;
+  const toggleTheme = useCallback(() => {}, []);
 
-  const toggleTheme = useCallback(() => {
-    setIsDark((prev) => !prev);
-  }, []);
-
-  // Apply theme to DOM whenever isDark changes
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', isDark);
-    localStorage.setItem('eventforge-theme', isDark ? 'dark' : 'light');
-  }, [isDark]);
-
-  // Read persisted theme once on mount using a subscription pattern
-  useEffect(() => {
-    if (!initialized.current) {
-      initialized.current = true;
-      const stored = localStorage.getItem('eventforge-theme');
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      const dark = stored ? stored === 'dark' : prefersDark;
-      // Use microtask to avoid synchronous setState in effect
-      queueMicrotask(() => { setIsDark(dark); });
-    }
+    document.documentElement.classList.remove('dark');
+    localStorage.setItem('digitalkongu-theme', 'light');
   }, []);
 
   return { isDark, toggleTheme };
@@ -131,11 +117,7 @@ function LoginPage() {
     }
   };
 
-  const demoAccounts = [
-    { role: 'Admin', email: 'admin@eventforge.com', password: 'admin123', color: 'from-emerald-500 to-teal-600' },
-    { role: 'Coordinator', email: 'coordinator@eventforge.com', password: 'coord123', color: 'from-amber-500 to-orange-600' },
-    { role: 'Evaluator', email: 'evaluator@eventforge.com', password: 'eval123', color: 'from-violet-500 to-purple-600' },
-  ];
+
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
@@ -145,16 +127,9 @@ function LoginPage() {
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 shadow-lg shadow-emerald-500/20">
             <Zap className="h-5 w-5 text-white" />
           </div>
-          <span className="text-xl font-bold tracking-tight">EventForge</span>
+          <span className="text-xl font-bold tracking-tight">Digital Kongu</span>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={toggleTheme}
-          className="rounded-full"
-        >
-          {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-        </Button>
+
       </header>
 
       <div className="flex-1 flex items-center justify-center px-4 py-8">
@@ -251,40 +226,7 @@ function LoginPage() {
                   </Button>
                 </form>
 
-                <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
-                    <span className="w-full border-t" />
-                  </div>
-                  <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-card px-2 text-muted-foreground">Demo Accounts</span>
-                  </div>
-                </div>
 
-                <div className="grid gap-2">
-                  {demoAccounts.map((account) => (
-                    <button
-                      key={account.role}
-                      onClick={() => {
-                        setEmail(account.email);
-                        setPassword(account.password);
-                      }}
-                      className="flex items-center justify-between rounded-lg border p-3 text-left transition-all hover:bg-muted/50 hover:shadow-sm"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className={`flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br ${account.color}`}>
-                          <span className="text-xs font-bold text-white">
-                            {account.role[0]}
-                          </span>
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium">{account.role}</p>
-                          <p className="text-xs text-muted-foreground">{account.email}</p>
-                        </div>
-                      </div>
-                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                    </button>
-                  ))}
-                </div>
               </CardContent>
             </Card>
           </motion.div>
@@ -294,7 +236,7 @@ function LoginPage() {
       {/* Footer */}
       <footer className="py-4 text-center">
         <p className="text-xs text-muted-foreground">
-          EventForge &copy; {new Date().getFullYear()} — Enterprise Event Management Platform
+          Digital Kongu &copy; {new Date().getFullYear()} — Enterprise Event Management Platform
         </p>
       </footer>
     </div>
@@ -310,6 +252,40 @@ function AppShell() {
   const [evaluatorTab, setEvaluatorTab] = useState<EvaluatorTab>('dashboard');
   const [draftToEdit, setDraftToEdit] = useState<any>(null);
 
+  const [assignedEvents, setAssignedEvents] = useState<any[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [eventsLoading, setEventsLoading] = useState<boolean>(false);
+  const token = useAuthStore((s) => s.token);
+  const role = user?.role || 'ADMIN';
+
+  useEffect(() => {
+    if (!isAuthenticated || !token) return;
+    if (role === 'ADMIN') return;
+
+    async function loadAssignedEvents() {
+      setEventsLoading(true);
+      try {
+        const res = await fetch('/api/events', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            setAssignedEvents(data.data);
+            if (data.data.length === 1) {
+              setSelectedEventId(data.data[0].id);
+            }
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setEventsLoading(false);
+      }
+    }
+    loadAssignedEvents();
+  }, [isAuthenticated, token, role]);
+
   useEffect(() => {
     const handleEditEvaluation = (e: Event) => {
       const customEvent = e as CustomEvent;
@@ -321,8 +297,6 @@ function AppShell() {
       window.removeEventListener('edit-evaluation', handleEditEvaluation);
     };
   }, []);
-
-  const role = user?.role || 'ADMIN';
 
   const tabs = role === 'ADMIN' ? adminTabs
     : role === 'COORDINATOR' ? coordinatorTabs
@@ -360,18 +334,98 @@ function AppShell() {
         case 'users': return <UserManager />;
         case 'leaderboard': return <Leaderboard />;
       }
-    } else if (role === 'COORDINATOR') {
+      return null;
+    }
+
+    if (eventsLoading) {
+      return (
+        <div className="flex flex-col items-center justify-center py-24 space-y-4">
+          <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+          <p className="text-sm text-muted-foreground font-semibold">Loading assigned events...</p>
+        </div>
+      );
+    }
+
+    if (assignedEvents.length === 0) {
+      return (
+        <div className="min-h-[60vh] flex items-center justify-center p-4">
+          <Card className="max-w-md w-full shadow-lg border border-amber-200/50 dark:border-amber-900/30 bg-amber-50/20 dark:bg-amber-950/10 backdrop-blur-md">
+            <CardContent className="py-12 text-center space-y-4">
+              <div className="rounded-full bg-amber-100 dark:bg-amber-950/40 p-3 w-12 h-12 flex items-center justify-center mx-auto text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="h-6 w-6" />
+              </div>
+              <CardTitle className="text-lg font-bold text-foreground">No Events Assigned</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                No events have been assigned to your account. Please contact the administrator.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
+
+    if (assignedEvents.length > 1 && selectedEventId === null) {
+      return (
+        <div className="min-h-[65vh] flex items-center justify-center p-4">
+          <Card className="max-w-2xl w-full shadow-lg border bg-card/60 backdrop-blur-md">
+            <CardHeader className="text-center">
+              <CardTitle className="text-2xl font-bold bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text text-transparent">
+                Select an Event
+              </CardTitle>
+              <CardDescription>
+                You are assigned to multiple events. Please select one to continue.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 sm:grid-cols-2 max-h-[50vh] overflow-y-auto pr-1">
+                {assignedEvents.map((event) => (
+                  <button
+                    key={event.id}
+                    onClick={() => setSelectedEventId(event.id)}
+                    className="flex flex-col text-left p-4 rounded-xl border border-muted hover:border-emerald-500 hover:bg-emerald-50/10 transition-all duration-200 group relative overflow-hidden bg-card"
+                  >
+                    <div className="absolute top-0 right-0 h-1.5 w-0 bg-emerald-500 group-hover:w-full transition-all duration-300" />
+                    <span className="font-bold text-foreground group-hover:text-emerald-600 transition-colors text-base">
+                      {event.name}
+                    </span>
+                    <span className="text-xs text-muted-foreground mt-1">
+                      {event.program?.name}
+                    </span>
+                    <span className="text-xs text-muted-foreground mt-0.5">
+                      Venue: {event.venue || 'TBD'}
+                    </span>
+                    <div className="mt-3 flex items-center gap-2">
+                      <Badge variant="outline" className="text-[10px]">
+                        {event.eventType}
+                      </Badge>
+                      {event.eventDate && (
+                        <span className="text-[10px] text-muted-foreground">
+                          {new Date(event.eventDate).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
+
+    if (role === 'COORDINATOR') {
       switch (coordinatorTab) {
         case 'dashboard': return <CoordinatorDashboard />;
-        case 'participants': return <ParticipantManager />;
-        case 'leaderboard': return <Leaderboard />;
-        case 'bulk-upload': return <BulkUpload />;
+        case 'participants': return <ParticipantManager defaultEventId={selectedEventId || undefined} />;
+        case 'leaderboard': return <Leaderboard defaultEventId={selectedEventId || undefined} />;
+        case 'bulk-upload': return <BulkUpload defaultEventId={selectedEventId || undefined} />;
       }
     } else {
       switch (evaluatorTab) {
         case 'dashboard': return <EvaluatorDashboard />;
         case 'evaluate': return (
           <EvaluationForm
+            defaultEventId={selectedEventId || undefined}
             initialDraftToEdit={draftToEdit}
             onClearDraftToEdit={() => setDraftToEdit(null)}
           />
@@ -385,7 +439,7 @@ function AppShell() {
           />
         );
         case 'history': return <EvaluationHistory />;
-        case 'leaderboard': return <Leaderboard />;
+        case 'leaderboard': return <Leaderboard defaultEventId={selectedEventId || undefined} />;
       }
     }
   };
@@ -407,20 +461,24 @@ function AppShell() {
             <div className={`flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br ${roleColors[role]} shadow-lg`}>
               <Zap className="h-4 w-4 text-white" />
             </div>
-            <h1 className="text-lg font-bold tracking-tight">EventForge</h1>
+            <h1 className="text-lg font-bold tracking-tight">Digital Kongu</h1>
             <Badge className={`border-0 text-xs ${roleBadgeColors[role]}`}>
               {role}
             </Badge>
           </div>
           <div className="flex-1" />
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleTheme}
-            className="rounded-full h-8 w-8"
-          >
-            {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </Button>
+          {isAuthenticated && role !== 'ADMIN' && assignedEvents.length > 1 && selectedEventId && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSelectedEventId(null)}
+              className="mr-2 gap-1.5 border-emerald-200 hover:bg-emerald-50 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400"
+            >
+              <RefreshCw className="h-3.5 w-3.5 animate-spin-hover" />
+              Switch Event
+            </Button>
+          )}
+
           {isAuthenticated && user && (
             <div className="flex items-center gap-3">
               <div className="hidden text-right sm:block">
@@ -518,7 +576,7 @@ function AppShell() {
       <footer className="mt-auto border-t bg-white/50 dark:bg-gray-950/50">
         <div className="px-4 py-3 text-center">
           <p className="text-xs text-muted-foreground">
-            EventForge — Enterprise Event Management Platform &copy; {new Date().getFullYear()}
+            Digital Kongu — Enterprise Event Management Platform &copy; {new Date().getFullYear()}
           </p>
         </div>
       </footer>
@@ -564,7 +622,7 @@ export default function Home() {
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950">
         <div className="flex flex-col items-center gap-3">
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
-          <p className="text-sm text-muted-foreground">Loading EventForge...</p>
+          <p className="text-sm text-muted-foreground">Loading Digital Kongu...</p>
         </div>
       </div>
     );

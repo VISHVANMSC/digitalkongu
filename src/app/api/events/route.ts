@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const programId = searchParams.get('programId');
+    const full = searchParams.get('full') === 'true';
 
     const where: any = { status: { not: 'DELETED' } };
     if (programId) {
@@ -26,50 +27,75 @@ export async function GET(request: NextRequest) {
         where: { userId: payload.userId },
         select: { eventId: true },
       });
-      const assignedEventIds = assignments.map((a) => a.eventId);
+      const panelAssignments = await db.panelCoordinator.findMany({
+        where: { userId: payload.userId },
+        select: { panel: { select: { eventId: true } } },
+      });
+      const assignedEventIds = Array.from(new Set([
+        ...assignments.map((a) => a.eventId),
+        ...panelAssignments.map((pa) => pa.panel.eventId),
+      ]));
       where.id = { in: assignedEventIds };
     } else if (payload.role === 'EVALUATOR') {
       const assignments = await db.eventEvaluator.findMany({
         where: { userId: payload.userId },
         select: { eventId: true },
       });
-      const assignedEventIds = assignments.map((a) => a.eventId);
+      const panelAssignments = await db.panelEvaluator.findMany({
+        where: { userId: payload.userId },
+        select: { panel: { select: { eventId: true } } },
+      });
+      const assignedEventIds = Array.from(new Set([
+        ...assignments.map((a) => a.eventId),
+        ...panelAssignments.map((pa) => pa.panel.eventId),
+      ]));
       where.id = { in: assignedEventIds };
+    }
+
+    const include: any = {
+      program: {
+        select: { id: true, name: true },
+      },
+      _count: {
+        select: {
+          teams: true,
+          participants: true,
+          evaluations: true,
+          coordinators: true,
+          evaluators: true,
+        },
+      },
+    };
+
+    if (full) {
+      include.criteria = {
+        orderBy: { order: 'asc' },
+      };
+      include.coordinators = {
+        include: {
+          user: {
+            select: { id: true, name: true, email: true },
+          },
+        },
+      };
+      include.evaluators = {
+        include: {
+          user: {
+            select: { id: true, name: true, email: true },
+          },
+        },
+      };
+      include.panels = {
+        include: {
+          coordinators: { include: { user: { select: { id: true, name: true, email: true } } } },
+          evaluators: { include: { user: { select: { id: true, name: true, email: true } } } },
+        },
+      };
     }
 
     const events = await db.event.findMany({
       where,
-      include: {
-        program: {
-          select: { id: true, name: true },
-        },
-        criteria: {
-          orderBy: { order: 'asc' },
-        },
-        coordinators: {
-          include: {
-            user: {
-              select: { id: true, name: true, email: true },
-            },
-          },
-        },
-        evaluators: {
-          include: {
-            user: {
-              select: { id: true, name: true, email: true },
-            },
-          },
-        },
-        _count: {
-          select: {
-            teams: true,
-            participants: true,
-            evaluations: true,
-            coordinators: true,
-            evaluators: true,
-          },
-        },
-      },
+      include,
       orderBy: { createdAt: 'desc' },
     });
 
@@ -110,6 +136,7 @@ export async function POST(request: NextRequest) {
       description,
       venue,
       eventDate,
+      evaluationStart,
       eventType,
       evaluationMode,
       maxStarRating,
@@ -141,6 +168,7 @@ export async function POST(request: NextRequest) {
         description: description || null,
         venue: venue || null,
         eventDate: eventDate ? new Date(eventDate) : null,
+        evaluationStart: evaluationStart ? new Date(evaluationStart) : null,
         eventType: eventType || 'TEAM',
         evaluationMode: evaluationMode || 'MARKS',
         maxStarRating: maxStarRating || 5,

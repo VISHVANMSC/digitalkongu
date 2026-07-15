@@ -115,6 +115,17 @@ export async function PUT(
 
     // Coordinator must be assigned to the event
     if (isCoordinator && !isAdmin) {
+      const dbUser = await db.user.findUnique({
+        where: { id: payload.userId },
+        select: { canEdit: true },
+      });
+      if (!dbUser || !dbUser.canEdit) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden: Coordinator does not have editing rights' },
+          { status: 403 }
+        );
+      }
+
       const isAssigned = await db.eventCoordinator.findUnique({
         where: { eventId_userId: { eventId: existing.eventId, userId: payload.userId } },
       });
@@ -127,11 +138,12 @@ export async function PUT(
     }
 
     const body = await request.json();
-    const { name, college, members } = body;
+    const { name, college, members, panelId } = body;
 
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
     if (college !== undefined) updateData.college = college;
+    if (panelId !== undefined) updateData.panelId = panelId || null;
 
     // Handle member updates
     if (members !== undefined) {
@@ -147,9 +159,17 @@ export async function PUT(
             college: m.college || college || existing.college || null,
             contactNumber: m.contactNumber || null,
             email: m.email || null,
+            panelId: panelId !== undefined ? (panelId || null) : (existing.panelId || null),
           })),
         };
       }
+    }
+
+    if (panelId !== undefined) {
+      await db.participant.updateMany({
+        where: { teamId: id },
+        data: { panelId: panelId || null },
+      });
     }
 
     const team = await db.team.update({
@@ -215,6 +235,17 @@ export async function DELETE(
 
     // Coordinator must be assigned to the event
     if (isCoordinator && !isAdmin) {
+      const dbUser = await db.user.findUnique({
+        where: { id: payload.userId },
+        select: { canEdit: true },
+      });
+      if (!dbUser || !dbUser.canEdit) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden: Coordinator does not have editing rights' },
+          { status: 403 }
+        );
+      }
+
       const isAssigned = await db.eventCoordinator.findUnique({
         where: { eventId_userId: { eventId: existing.eventId, userId: payload.userId } },
       });

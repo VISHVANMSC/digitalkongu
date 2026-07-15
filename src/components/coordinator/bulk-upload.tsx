@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload,
@@ -24,6 +24,16 @@ import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { useAuthStore } from '@/store/authStore';
 import { toast } from 'sonner';
+import * as XLSX from 'xlsx';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 
 interface AssignedEvent {
   id: string;
@@ -37,16 +47,133 @@ interface UploadResult {
   errors: { row: number; message: string }[];
 }
 
-export function BulkUpload() {
+export function BulkUpload({ defaultEventId }: { defaultEventId?: string }) {
   const token = useAuthStore((s) => s.token);
   const [events, setEvents] = useState<AssignedEvent[]>([]);
-  const [selectedEventId, setSelectedEventId] = useState<string>('');
+  const [selectedEventId, setSelectedEventId] = useState<string>(defaultEventId || '');
   const [loading, setLoading] = useState(true);
+
+  const [panels, setPanels] = useState<any[]>([]);
+  const [selectedPanelId, setSelectedPanelId] = useState<string>('');
+
+  const loadPanels = useCallback(async () => {
+    if (!selectedEventId || !token) {
+      setPanels([]);
+      setSelectedPanelId('');
+      return;
+    }
+    try {
+      const res = await fetch(`/api/events/${selectedEventId}/panels`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setPanels(data.data);
+          if (data.data.length > 0 && !data.data.some((p: any) => p.id === selectedPanelId)) {
+            setSelectedPanelId(data.data[0].id);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load panels', e);
+    }
+  }, [selectedEventId, token, selectedPanelId]);
+
+  useEffect(() => {
+    loadPanels();
+  }, [selectedEventId]);
+
+
+  useEffect(() => {
+    if (defaultEventId) {
+      setSelectedEventId(defaultEventId);
+    }
+  }, [defaultEventId]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
+  const [currentStatus, setCurrentStatus] = useState<string>('');
+  const [timeRemaining, setTimeRemaining] = useState<string>('');
+  const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'confirm-cancel' | 'cancelling' | 'cancelled' | 'success' | 'failed'>('idle');
+  const [errorMsg, setErrorMsg] = useState<string>('');
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+
+  const createdTeamIds = useRef<string[]>([]);
+  const createdParticipantIds = useRef<string[]>([]);
+  const isCancelledRef = useRef<boolean>(false);
+
+  // Disable page closing/reloading and block focus transitions during upload
+  useEffect(() => {
+    if (uploadState !== 'uploading' && uploadState !== 'confirm-cancel' && uploadState !== 'cancelling') return;
+    
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Tab' || e.key === 'Escape') {
+        e.preventDefault();
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [uploadState]);
+
+  const performCleanup = async () => {
+    try {
+      await fetch('/api/bulk-upload/cancel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          teamIds: createdTeamIds.current,
+          participantIds: createdParticipantIds.current,
+        }),
+      });
+    } catch (e) {
+      console.error('Cleanup failed:', e);
+    }
+  };
+
+  const handleCancelClick = () => {
+    setUploadState('confirm-cancel');
+  };
+
+  const handleContinueUpload = () => {
+    setUploadState('uploading');
+  };
+
+  const handleConfirmCancel = async () => {
+    setUploadState('cancelling');
+    isCancelledRef.current = true;
+    setCurrentStatus('Cancelling upload and cleaning up database...');
+    await performCleanup();
+    setUploadState('cancelled');
+    toast.info('Upload cancelled successfully');
+  };
+
+  const handleCloseModal = () => {
+    setUploadState('idle');
+    setUploading(false);
+    setSelectedFile(null);
+    setUploadProgress(0);
+    setUploadResult(null);
+  };
+
+  const handleRetryUpload = () => {
+    handleUpload();
+  };
 
   const selectedEvent = events.find((e) => e.id === selectedEventId);
 
@@ -59,7 +186,12 @@ export function BulkUpload() {
         });
         if (res.ok) {
           const data = await res.json();
-          if (data.success) setEvents(data.data);
+          if (data.success) {
+            setEvents(data.data);
+            if (data.data.length === 1) {
+              setSelectedEventId(data.data[0].id);
+            }
+          }
         }
       } catch {
         toast.error('Failed to load events');
@@ -115,52 +247,248 @@ export function BulkUpload() {
   };
 
   const handleUpload = async () => {
-    if (!selectedFile || !selectedEventId) {
-      toast.error('Please select an event and file');
+    if (!selectedFile || !selectedEventId || !selectedPanelId) {
+      toast.error('Please select an event, panel, and file');
       return;
     }
 
     setUploading(true);
-    setUploadProgress(0);
-    setUploadResult(null);
-
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-    formData.append('eventId', selectedEventId);
+    setCurrentStatus('Checking event status...');
 
     try {
-      // Simulate progress
-      const progressInterval = setInterval(() => {
-        setUploadProgress((prev) => {
-          if (prev >= 90) {
-            clearInterval(progressInterval);
-            return 90;
-          }
-          return prev + 10;
-        });
-      }, 200);
-
-      const res = await fetch('/api/bulk-upload', {
-        method: 'POST',
+      const checkRes = await fetch(`/api/events/${selectedEventId}`, {
         headers: { Authorization: `Bearer ${token}` },
-        body: formData,
+      });
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        if (checkData.success && checkData.data) {
+          const count = checkData.data._count;
+          const isTeam = selectedEvent?.eventType === 'TEAM';
+          const hasExisting = isTeam ? count.teams > 0 : count.participants > 0;
+          if (hasExisting) {
+            setShowConfirmModal(true);
+            setUploading(false);
+            setCurrentStatus('');
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Failed to check existing data:', e);
+    }
+
+    executeUpload('append');
+  };
+
+  const executeUpload = async (mode: 'replace' | 'append') => {
+    setUploadState('uploading');
+    setUploading(true);
+    setUploadProgress(0);
+    setCurrentStatus('Reading file...');
+    setTimeRemaining('');
+    setUploadResult(null);
+
+    createdTeamIds.current = [];
+    createdParticipantIds.current = [];
+    isCancelledRef.current = false;
+
+    try {
+      if (mode === 'replace') {
+        setCurrentStatus('Deleting existing event data...');
+        const clearRes = await fetch('/api/bulk-upload', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            eventId: selectedEventId,
+            action: 'clear',
+          }),
+        });
+        if (!clearRes.ok) {
+          const errorData = await clearRes.json();
+          throw new Error(errorData.error || 'Failed to clear existing event data');
+        }
+      }
+
+      const arrayBuffer = await selectedFile!.arrayBuffer();
+      const data = new Uint8Array(arrayBuffer);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const rows: any[] = XLSX.utils.sheet_to_json(worksheet);
+
+      if (rows.length === 0) {
+        toast.error('Excel file is empty');
+        setUploadState('failed');
+        setErrorMsg('Excel file is empty.');
+        setUploading(false);
+        return;
+      }
+
+      // Group/prepare items based on eventType
+      let itemsToProcess: any[] = [];
+      const isTeam = selectedEvent?.eventType === 'TEAM';
+
+      if (isTeam) {
+        // Pre-process rows for merged cells
+        let lastTeamName = '';
+        const rowsCopy = JSON.parse(JSON.stringify(rows));
+        for (let i = 0; i < rowsCopy.length; i++) {
+          const tName = rowsCopy[i]['Team Name']?.toString().trim();
+          if (tName) {
+            lastTeamName = tName;
+          } else if (lastTeamName) {
+            rowsCopy[i]['Team Name'] = lastTeamName;
+          }
+        }
+        lastTeamName = '';
+        for (let i = rowsCopy.length - 1; i >= 0; i--) {
+          const tName = rowsCopy[i]['Team Name']?.toString().trim();
+          if (tName) {
+            lastTeamName = tName;
+          } else if (lastTeamName) {
+            rowsCopy[i]['Team Name'] = lastTeamName;
+          }
+        }
+
+        const teamMap = new Map<string, any[]>();
+        for (let i = 0; i < rowsCopy.length; i++) {
+          const row = rowsCopy[i];
+          const teamName = row['Team Name']?.toString().trim();
+          const memberName = (row['Name'] || row['Participant Name'] || row['Member Name'])?.toString().trim();
+
+          if (!teamName || !memberName) continue;
+
+          if (!teamMap.has(teamName)) {
+            teamMap.set(teamName, []);
+          }
+
+          teamMap.get(teamName)!.push({
+            name: memberName,
+            registerNumber: row['Register Number']?.toString().trim() || null,
+            department: row['Department']?.toString().trim() || null,
+            college: row['College']?.toString().trim() || null,
+            contactNumber: row['Contact Number']?.toString().trim() || null,
+            email: row['Email']?.toString().trim() || null,
+          });
+        }
+
+        for (const [teamName, members] of teamMap) {
+          itemsToProcess.push({
+            name: teamName,
+            members,
+          });
+        }
+      } else {
+        // Individual event format
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          const participantName = (row['Name'] || row['Participant Name'] || row['Member Name'])?.toString().trim();
+          if (!participantName) continue;
+
+          itemsToProcess.push({
+            name: participantName,
+            registerNumber: row['Register Number']?.toString().trim() || null,
+            department: row['Department']?.toString().trim() || null,
+            college: row['College']?.toString().trim() || null,
+            contactNumber: row['Contact Number']?.toString().trim() || null,
+            email: row['Email']?.toString().trim() || null,
+          });
+        }
+      }
+
+      if (itemsToProcess.length === 0) {
+        toast.error('No valid participants or teams found in file');
+        setUploadState('failed');
+        setErrorMsg('No valid participants or teams found in file.');
+        setUploading(false);
+        return;
+      }
+
+      let successCount = 0;
+      let errorCount = 0;
+      const errorsList: { row: number; message: string }[] = [];
+
+      for (let i = 0; i < itemsToProcess.length; i++) {
+        if (isCancelledRef.current) {
+          break;
+        }
+
+        const item = itemsToProcess[i];
+        setCurrentStatus(`Uploading "${item.name}" (${i + 1}/${itemsToProcess.length})...`);
+        
+        try {
+          const res = await fetch('/api/bulk-upload', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              eventId: selectedEventId,
+              type: isTeam ? 'TEAM' : 'INDIVIDUAL',
+              item,
+              panelId: selectedPanelId || undefined,
+            }),
+          });
+
+          const resData = await res.json();
+          if (res.ok && resData.success) {
+            successCount += isTeam ? item.members.length : 1;
+            
+            // Record created IDs for rollback tracking
+            if (resData.data?.createdTeamId) {
+              createdTeamIds.current.push(resData.data.createdTeamId);
+            }
+            if (resData.data?.createdParticipantIds) {
+              createdParticipantIds.current.push(...resData.data.createdParticipantIds);
+            }
+
+            setCurrentStatus(resData.data?.statusMsg || `Success: ${item.name}`);
+          } else {
+            errorCount += isTeam ? item.members.length : 1;
+            errorsList.push({
+              row: i + 2,
+              message: resData.error || `Failed to process ${item.name}`,
+            });
+            throw new Error(resData.error || `Failed to process ${item.name}`);
+          }
+        } catch (e) {
+          if (isCancelledRef.current) break;
+          
+          // Cleanup database on error to prevent partial records
+          setCurrentStatus('Error encountered! Rolling back database...');
+          await performCleanup();
+
+          setErrorMsg(e instanceof Error ? e.message : 'Upload failed due to database or network error.');
+          setUploadState('failed');
+          setUploading(false);
+          return;
+        }
+
+        // Calculate progress
+        const progress = Math.round(((i + 1) / itemsToProcess.length) * 100);
+        setUploadProgress(progress);
+      }
+
+      if (isCancelledRef.current) {
+        return;
+      }
+
+      setUploadState('success');
+      setUploadResult({
+        successCount,
+        errorCount,
+        errors: errorsList,
       });
 
-      clearInterval(progressInterval);
-      setUploadProgress(100);
-
-      const data = await res.json();
-
-      if (data.success) {
-        setUploadResult(data.data);
-        toast.success(
-          `Upload complete: ${data.data.successCount} records imported, ${data.data.errorCount} errors`
-        );
-      } else {
-        toast.error(data.error || 'Upload failed');
-      }
-    } catch {
-      toast.error('Upload failed. Please try again.');
+    } catch (error) {
+      console.error(error);
+      toast.error('An error occurred while parsing the file');
+      setUploadState('failed');
+      setErrorMsg('An error occurred while parsing the file.');
     } finally {
       setUploading(false);
     }
@@ -222,22 +550,61 @@ export function BulkUpload() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div className="flex-1 space-y-2">
               <label className="text-sm font-medium">Select Event</label>
-              <Select value={selectedEventId} onValueChange={(v) => { setSelectedEventId(v); resetUpload(); }}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Choose an event..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {events.map((event) => (
-                    <SelectItem key={event.id} value={event.id}>
-                      {event.name}{' '}
-                      <Badge variant="outline" className="ml-1 text-xs">
-                        {event.eventType}
-                      </Badge>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {events.length > 1 ? (
+                <Select value={selectedEventId} onValueChange={(v) => { setSelectedEventId(v); resetUpload(); }}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Choose an event..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {events.map((event) => (
+                      <SelectItem key={event.id} value={event.id}>
+                        {event.name}{' '}
+                        <Badge variant="outline" className="ml-1 text-xs">
+                          {event.eventType}
+                        </Badge>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : selectedEvent ? (
+                <div className="p-3 border rounded-lg bg-muted/40 font-semibold flex items-center gap-2">
+                  <span>{selectedEvent.name}</span>
+                  <Badge variant="outline" className="text-xs">
+                    {selectedEvent.eventType}
+                  </Badge>
+                </div>
+              ) : (
+                <div className="p-3 border rounded-lg bg-muted/40 text-muted-foreground text-sm italic">
+                  No event available
+                </div>
+              )}
             </div>
+
+            {selectedEventId && panels.length > 1 && (
+              <div className="flex-1 space-y-2">
+                <label className="text-sm font-medium">Select Panel *</label>
+                  <Select value={selectedPanelId} onValueChange={setSelectedPanelId}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Choose a panel..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {panels.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+              </div>
+            )}
+            {selectedEventId && panels.length === 1 && (
+              <div className="flex-1 space-y-2">
+                <label className="text-sm font-medium">Panel</label>
+                <div className="h-9 px-3 border rounded-md bg-muted/40 flex items-center text-sm font-semibold">
+                  {panels[0].name}
+                </div>
+              </div>
+            )}
           </div>
 
           {selectedEvent && (
@@ -341,15 +708,7 @@ export function BulkUpload() {
                 </AnimatePresence>
               </div>
 
-              {uploading && (
-                <div className="space-y-2">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-muted-foreground">Uploading...</span>
-                    <span className="font-medium text-emerald-600">{uploadProgress}%</span>
-                  </div>
-                  <Progress value={uploadProgress} className="h-2" />
-                </div>
-              )}
+
 
               <div className="flex gap-3">
                 <Button
@@ -442,6 +801,217 @@ export function BulkUpload() {
           </motion.div>
         )}
       </AnimatePresence>
+      {/* Upload Progress Modal Popup */}
+      {uploadState !== 'idle' && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-card text-card-foreground p-6 rounded-xl shadow-2xl max-w-md w-full border border-muted space-y-6 relative animate-in fade-in zoom-in-95 duration-200">
+            {uploadState === 'uploading' && (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <Loader2 className="h-6 w-6 animate-spin text-emerald-600 shrink-0" />
+                  <h3 className="text-lg font-bold">Uploading your file...</h3>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Please wait a few minutes while your file is being uploaded and processed.
+                </p>
+                
+                {/* Progress Indicator */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-xs font-semibold">
+                    <span className="text-muted-foreground">Progress</span>
+                    <span className="text-emerald-600">{uploadProgress}%</span>
+                  </div>
+                  <Progress value={uploadProgress} className="h-2" />
+                  {currentStatus && (
+                    <p className="text-xs text-muted-foreground italic truncate">
+                      {currentStatus}
+                    </p>
+                  )}
+                </div>
+
+                {/* Warning message */}
+                <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 rounded-lg space-y-2">
+                  <div className="flex items-center gap-2 text-amber-800 dark:text-amber-400 font-bold text-sm">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    <span>⚠️ Important</span>
+                  </div>
+                  <ul className="text-xs text-amber-700 dark:text-amber-400/90 list-disc pl-4 space-y-1">
+                    <li>Do not refresh or close this page while the upload is in progress.</li>
+                    <li>Interrupting the upload may result in incomplete or corrupted data.</li>
+                    <li>Please wait until the upload is completed successfully.</li>
+                    <li>During the upload, access to the rest of the portal is temporarily disabled to protect data integrity.</li>
+                  </ul>
+                </div>
+
+                <div className="pt-2 flex justify-end">
+                  <Button variant="outline" size="sm" onClick={handleCancelClick} className="text-destructive hover:bg-destructive/10">
+                    Cancel Upload
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {uploadState === 'confirm-cancel' && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-bold text-destructive">Cancel Upload?</h3>
+                <p className="text-sm text-muted-foreground">
+                  Are you sure you want to cancel this upload?
+                </p>
+                <div className="p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 rounded-lg text-xs space-y-1.5 text-red-800 dark:text-red-400">
+                  <p className="font-bold">Cancelling the upload will:</p>
+                  <ul className="list-disc pl-4 space-y-1">
+                    <li>Stop the upload immediately.</li>
+                    <li>Remove any partially uploaded data.</li>
+                    <li>Delete any temporary files or incomplete records created during this upload.</li>
+                    <li>Prevent incomplete or corrupted data from being saved.</li>
+                  </ul>
+                  <p className="font-bold mt-1">This action cannot be undone.</p>
+                </div>
+                <div className="flex justify-end gap-2.5 pt-2">
+                  <Button variant="outline" size="sm" onClick={handleContinueUpload}>
+                    Continue Upload
+                  </Button>
+                  <Button variant="destructive" size="sm" onClick={handleConfirmCancel}>
+                    Yes, Cancel Upload
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {uploadState === 'cancelling' && (
+              <div className="space-y-4 text-center py-6">
+                <Loader2 className="h-10 w-10 animate-spin text-destructive mx-auto" />
+                <h3 className="text-lg font-bold">Cancelling upload...</h3>
+                <p className="text-sm text-muted-foreground">
+                  Cleaning up temporary data and rolling back database changes. Please wait...
+                </p>
+              </div>
+            )}
+
+            {uploadState === 'cancelled' && (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3 text-amber-600">
+                  <AlertCircle className="h-6 w-6 shrink-0" />
+                  <h3 className="text-lg font-bold text-foreground">Upload Cancelled</h3>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Your upload has been cancelled successfully.
+                </p>
+                <p className="text-sm text-muted-foreground font-semibold">
+                  Any partially uploaded files and temporary data have been removed.
+                </p>
+                <div className="flex justify-end pt-2">
+                  <Button onClick={handleCloseModal} className="bg-emerald-600 hover:bg-emerald-700">
+                    Close
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {uploadState === 'success' && (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3 text-green-600">
+                  <CheckCircle2 className="h-6 w-6 shrink-0" />
+                  <h3 className="text-lg font-bold text-foreground">Upload Completed</h3>
+                </div>
+                <p className="text-sm text-muted-foreground font-medium">
+                  Your file has been uploaded and processed successfully.
+                </p>
+                {uploadResult && (
+                  <div className="p-3 bg-muted/30 border rounded-lg text-xs space-y-1">
+                    <p><strong>Total Teams/Participants:</strong> {uploadResult.successCount}</p>
+                    <p><strong>Errors encountered:</strong> {uploadResult.errorCount}</p>
+                  </div>
+                )}
+                <div className="flex justify-end pt-2">
+                  <Button onClick={handleCloseModal} className="bg-emerald-600 hover:bg-emerald-700">
+                    Continue
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {uploadState === 'failed' && (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3 text-destructive">
+                  <XCircle className="h-6 w-6 shrink-0" />
+                  <h3 className="text-lg font-bold text-foreground">Upload Failed</h3>
+                </div>
+                <p className="text-sm text-muted-foreground font-medium">
+                  Something went wrong while uploading your file.
+                </p>
+                {errorMsg && (
+                  <p className="p-2.5 bg-destructive/10 text-destructive text-xs rounded border border-destructive/20 font-medium">
+                    {errorMsg}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  All temporary data and partial database records have been rolled back and cleaned up.
+                </p>
+                <div className="flex justify-end gap-2.5 pt-2">
+                  <Button variant="outline" onClick={handleCloseModal}>
+                    Close
+                  </Button>
+                  <Button onClick={handleRetryUpload} className="bg-emerald-600 hover:bg-emerald-700">
+                    Retry Upload
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Existing Data Warning Dialog */}
+      <Dialog open={showConfirmModal} onOpenChange={setShowConfirmModal}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+              <AlertCircle className="h-5 w-5" />
+              Existing Data Detected
+            </DialogTitle>
+            <DialogDescription className="pt-2 text-sm text-muted-foreground leading-relaxed">
+              This event already has registered {selectedEvent?.eventType === 'TEAM' ? 'teams' : 'participants'}.
+              Choose how you would like to proceed with the upload:
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 py-4">
+            <button
+              onClick={() => {
+                setShowConfirmModal(false);
+                executeUpload('replace');
+              }}
+              className="flex flex-col text-left p-3.5 rounded-xl border border-muted hover:border-red-500 hover:bg-red-50/10 transition-all duration-200 group bg-card"
+            >
+              <span className="font-bold text-foreground group-hover:text-red-600 transition-colors text-sm">
+                Replace Existing
+              </span>
+              <span className="text-xs text-muted-foreground mt-1">
+                Deletes all existing {selectedEvent?.eventType === 'TEAM' ? 'teams' : 'participants'} and their evaluations/scores for this event, and uploads the new data.
+              </span>
+            </button>
+            <button
+              onClick={() => {
+                setShowConfirmModal(false);
+                executeUpload('append');
+              }}
+              className="flex flex-col text-left p-3.5 rounded-xl border border-muted hover:border-emerald-500 hover:bg-emerald-50/10 transition-all duration-200 group bg-card"
+            >
+              <span className="font-bold text-foreground group-hover:text-emerald-600 transition-colors text-sm">
+                Append
+              </span>
+              <span className="text-xs text-muted-foreground mt-1">
+                Keeps the existing records and adds the new ones alongside them.
+              </span>
+            </button>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowConfirmModal(false)} className="w-full sm:w-auto">
+              Cancel Upload
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

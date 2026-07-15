@@ -36,6 +36,17 @@ export async function PUT(
 
     // Coordinator must be assigned to the event
     if (isCoordinator && !isAdmin) {
+      const dbUser = await db.user.findUnique({
+        where: { id: payload.userId },
+        select: { canEdit: true },
+      });
+      if (!dbUser || !dbUser.canEdit) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden: Coordinator does not have editing rights' },
+          { status: 403 }
+        );
+      }
+
       const isAssigned = await db.eventCoordinator.findUnique({
         where: { eventId_userId: { eventId: existing.eventId, userId: payload.userId } },
       });
@@ -48,7 +59,7 @@ export async function PUT(
     }
 
     const body = await request.json();
-    const { name, registerNumber, department, college, contactNumber, email, teamId } = body;
+    const { name, registerNumber, department, college, contactNumber, email, teamId, panelId } = body;
 
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
@@ -58,6 +69,7 @@ export async function PUT(
     if (contactNumber !== undefined) updateData.contactNumber = contactNumber;
     if (email !== undefined) updateData.email = email;
     if (teamId !== undefined) updateData.teamId = teamId || null;
+    if (panelId !== undefined) updateData.panelId = panelId || null;
 
     const participant = await db.participant.update({
       where: { id },
@@ -111,6 +123,17 @@ export async function DELETE(
 
     // Coordinator must be assigned to the event
     if (isCoordinator && !isAdmin) {
+      const dbUser = await db.user.findUnique({
+        where: { id: payload.userId },
+        select: { canEdit: true },
+      });
+      if (!dbUser || !dbUser.canEdit) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden: Coordinator does not have editing rights' },
+          { status: 403 }
+        );
+      }
+
       const isAssigned = await db.eventCoordinator.findUnique({
         where: { eventId_userId: { eventId: existing.eventId, userId: payload.userId } },
       });

@@ -128,6 +128,15 @@ export function ProgramManager() {
     if (token) fetchPrograms();
   }, [token, fetchPrograms]);
 
+  const toDateTimeLocalString = (dateInput: any) => {
+    if (!dateInput) return '';
+    const date = new Date(dateInput);
+    if (isNaN(date.getTime())) return '';
+    const tzOffset = date.getTimezoneOffset() * 60000;
+    const localISOTime = new Date(date.getTime() - tzOffset).toISOString().slice(0, 16);
+    return localISOTime;
+  };
+
   const resetForm = () => {
     setFormName('');
     setFormDescription('');
@@ -147,8 +156,8 @@ export function ProgramManager() {
     setFormName(program.name);
     setFormDescription(program.description || '');
     setFormVenue(program.venue || '');
-    setFormStartDate(program.startDate ? program.startDate.split('T')[0] : '');
-    setFormEndDate(program.endDate ? program.endDate.split('T')[0] : '');
+    setFormStartDate(program.startDate ? toDateTimeLocalString(program.startDate) : '');
+    setFormEndDate(program.endDate ? toDateTimeLocalString(program.endDate) : '');
     setDialogOpen(true);
   };
 
@@ -309,7 +318,7 @@ export function ProgramManager() {
           return date ? (
             <div className="flex items-center gap-1.5 text-sm">
               <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />
-              {new Date(date).toLocaleDateString()}
+              {new Date(date).toLocaleString()}
             </div>
           ) : (
             <span className="text-muted-foreground">—</span>
@@ -321,7 +330,7 @@ export function ProgramManager() {
         header: 'End Date',
         cell: ({ row }) => {
           const date = row.getValue('endDate') as string | null;
-          return date ? new Date(date).toLocaleDateString() : '—';
+          return date ? new Date(date).toLocaleString() : '—';
         },
       },
       {
@@ -566,7 +575,7 @@ export function ProgramManager() {
                 <Label htmlFor="startDate">Start Date</Label>
                 <Input
                   id="startDate"
-                  type="date"
+                  type="datetime-local"
                   value={formStartDate}
                   onChange={(e) => setFormStartDate(e.target.value)}
                 />
@@ -575,7 +584,7 @@ export function ProgramManager() {
                 <Label htmlFor="endDate">End Date</Label>
                 <Input
                   id="endDate"
-                  type="date"
+                  type="datetime-local"
                   value={formEndDate}
                   onChange={(e) => setFormEndDate(e.target.value)}
                 />

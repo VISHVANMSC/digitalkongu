@@ -24,6 +24,9 @@ import {
   Star,
   ChevronsUpDown,
   Check,
+  FolderKanban,
+  Users,
+  Settings,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -107,6 +110,7 @@ interface EventRow {
   evaluationMode: 'MARKS' | 'STARS';
   maxStarRating: number;
   status: 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | 'DELETED';
+  evaluationStart: string | null;
   programId: string;
   program: { id: string; name: string };
   criteria: Array<{
@@ -250,6 +254,15 @@ function SearchableMultiSelect({
   );
 }
 
+const toDateTimeLocalString = (dateInput: string | Date | null) => {
+  if (!dateInput) return '';
+  const date = new Date(dateInput);
+  if (isNaN(date.getTime())) return '';
+  const tzOffset = date.getTimezoneOffset() * 60000;
+  const localTime = new Date(date.getTime() - tzOffset);
+  return localTime.toISOString().slice(0, 16);
+};
+
 export function EventManager() {
   const token = useAuthStore((s) => s.token);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -281,11 +294,228 @@ export function EventManager() {
   ]);
   const [formCoordinatorIds, setFormCoordinatorIds] = useState<string[]>([]);
   const [formEvaluatorIds, setFormEvaluatorIds] = useState<string[]>([]);
+  const [formEvaluationStart, setFormEvaluationStart] = useState('');
+
+  // Panel management states
+  const [panelsDialogOpen, setPanelsDialogOpen] = useState(false);
+  const [activePanelEvent, setActivePanelEvent] = useState<EventRow | null>(null);
+  const [panels, setPanels] = useState<any[]>([]);
+  const [panelsLoading, setPanelsLoading] = useState(false);
+  const [newPanelName, setNewPanelName] = useState('');
+  const [newPanelCoords, setNewPanelCoords] = useState<string[]>([]);
+  const [newPanelEvals, setNewPanelEvals] = useState<string[]>([]);
+  const [editingPanel, setEditingPanel] = useState<any | null>(null);
+  const [autoPanelCount, setAutoPanelCount] = useState(2);
+  const [panelMembersTab, setPanelMembersTab] = useState<'panels' | 'assign'>('panels');
+  const [eventMembers, setEventMembers] = useState<any[]>([]);
+  const [membersLoading, setMembersLoading] = useState(false);
+
+  const fetchPanelsForEvent = useCallback(async (eventId: string) => {
+    try {
+      setPanelsLoading(true);
+      const res = await fetch(`/api/events/${eventId}/panels`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.success) setPanels(data.data);
+    } catch {
+      toast.error('Failed to fetch panels');
+    } finally {
+      setPanelsLoading(false);
+    }
+  }, [token]);
+
+  const fetchMembersForEvent = useCallback(async (event: EventRow) => {
+    try {
+      setMembersLoading(true);
+      const endpoint = event.eventType === 'TEAM' ? `/api/teams?eventId=${event.id}` : `/api/participants?eventId=${event.id}`;
+      const res = await fetch(endpoint, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.success) setEventMembers(data.data);
+    } catch {
+      toast.error('Failed to fetch event members');
+    } finally {
+      setMembersLoading(false);
+    }
+  }, [token]);
+
+  const openPanelsDialog = (event: EventRow) => {
+    setActivePanelEvent(event);
+    setPanelMembersTab('panels');
+    fetchPanelsForEvent(event.id);
+    fetchMembersForEvent(event);
+    setPanelsDialogOpen(true);
+  };
+
+  const startEditPanel = (panel: any) => {
+    setEditingPanel(panel);
+    setNewPanelName(panel.name);
+    setNewPanelCoords(panel.coordinators.map((c: any) => c.userId));
+    setNewPanelEvals(panel.evaluators.map((e: any) => e.userId));
+  };
+
+  const cancelEditPanel = () => {
+    setEditingPanel(null);
+    setNewPanelName('');
+    setNewPanelCoords([]);
+    setNewPanelEvals([]);
+  };
+
+  const handleUpdatePanel = async () => {
+    if (!editingPanel || !activePanelEvent) return;
+    if (!newPanelName.trim()) {
+      toast.error('Panel name is required');
+      return;
+    }
+    try {
+      const res = await fetch(`/api/panels/${editingPanel.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          name: newPanelName.trim(),
+          coordinatorIds: newPanelCoords,
+          evaluatorIds: newPanelEvals,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success('Panel updated');
+        cancelEditPanel();
+        fetchPanelsForEvent(activePanelEvent.id);
+      } else {
+        toast.error(data.error || 'Failed to update panel');
+      }
+    } catch {
+      toast.error('Error updating panel');
+    }
+  };
+
+  const handleCreatePanel = async () => {
+    if (!activePanelEvent) return;
+    if (editingPanel) {
+      await handleUpdatePanel();
+      return;
+    }
+    if (!newPanelName.trim()) {
+      toast.error('Panel name is required');
+      return;
+    }
+    try {
+      const res = await fetch(`/api/events/${activePanelEvent.id}/panels`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          name: newPanelName.trim(),
+          coordinatorIds: newPanelCoords,
+          evaluatorIds: newPanelEvals,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success('Panel created');
+        setNewPanelName('');
+        setNewPanelCoords([]);
+        setNewPanelEvals([]);
+        fetchPanelsForEvent(activePanelEvent.id);
+      } else {
+        toast.error(data.error || 'Failed to create panel');
+      }
+    } catch {
+      toast.error('Error creating panel');
+    }
+  };
+
+  const handleAutoGeneratePanels = async () => {
+    if (!activePanelEvent) return;
+    if (autoPanelCount < 1) {
+      toast.error('Valid panel count is required');
+      return;
+    }
+    try {
+      const res = await fetch(`/api/events/${activePanelEvent.id}/panels`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          action: 'auto',
+          panelCount: autoPanelCount,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`${autoPanelCount} panels generated and distributed`);
+        fetchPanelsForEvent(activePanelEvent.id);
+        fetchMembersForEvent(activePanelEvent);
+      } else {
+        toast.error(data.error || 'Failed to generate panels');
+      }
+    } catch {
+      toast.error('Error generating panels');
+    }
+  };
+
+  const handleDeletePanel = async (panelId: string) => {
+    if (!activePanelEvent) return;
+    try {
+      const res = await fetch(`/api/panels/${panelId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success('Panel deleted');
+        fetchPanelsForEvent(activePanelEvent.id);
+        fetchMembersForEvent(activePanelEvent);
+      } else {
+        toast.error(data.error || 'Failed to delete panel');
+      }
+    } catch {
+      toast.error('Error deleting panel');
+    }
+  };
+
+  const handleAssignPanel = async (memberId: string, panelId: string) => {
+    if (!activePanelEvent) return;
+    try {
+      const endpoint = activePanelEvent.eventType === 'TEAM' 
+        ? `/api/teams/${memberId}`
+        : `/api/participants/${memberId}`;
+      const res = await fetch(endpoint, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          panelId: panelId === 'unassigned' ? null : panelId,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success('Panel assignment updated');
+        fetchMembersForEvent(activePanelEvent);
+      } else {
+        toast.error(data.error || 'Failed to update assignment');
+      }
+    } catch {
+      toast.error('Error updating assignment');
+    }
+  };
 
   const fetchEvents = useCallback(async (silent = false) => {
     try {
       if (!silent) setLoading(true);
-      const res = await fetch('/api/events', {
+      const res = await fetch('/api/events?full=true', {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
@@ -345,6 +575,7 @@ export function EventManager() {
     setFormDescription('');
     setFormVenue('');
     setFormEventDate('');
+    setFormEvaluationStart('');
     setFormProgramId('');
     setFormEventType('TEAM');
     setFormEvalMode('MARKS');
@@ -365,7 +596,8 @@ export function EventManager() {
     setFormName(event.name);
     setFormDescription(event.description || '');
     setFormVenue(event.venue || '');
-    setFormEventDate(event.eventDate ? event.eventDate.split('T')[0] : '');
+    setFormEventDate(toDateTimeLocalString(event.eventDate));
+    setFormEvaluationStart(toDateTimeLocalString(event.evaluationStart));
     setFormProgramId(event.programId);
     setFormEventType(event.eventType);
     setFormEvalMode(event.evaluationMode);
@@ -442,6 +674,7 @@ export function EventManager() {
         description: formDescription.trim() || undefined,
         venue: formVenue.trim() || undefined,
         eventDate: formEventDate || undefined,
+        evaluationStart: formEvaluationStart || undefined,
         programId: formProgramId,
         eventType: formEventType,
         evaluationMode: formEvalMode,
@@ -578,7 +811,7 @@ export function EventManager() {
           return date ? (
             <div className="flex items-center gap-1.5 text-sm">
               <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />
-              {new Date(date).toLocaleDateString()}
+              {new Date(date).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
             </div>
           ) : (
             <span className="text-muted-foreground">—</span>
@@ -614,6 +847,10 @@ export function EventManager() {
                 <DropdownMenuItem onClick={() => openEditDialog(event)}>
                   <Pencil className="mr-2 h-4 w-4" />
                   Edit
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => openPanelsDialog(event)}>
+                  <FolderKanban className="mr-2 h-4 w-4" />
+                  Manage Panels
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   className="text-destructive"
@@ -825,16 +1062,27 @@ export function EventManager() {
                     />
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 gap-4">
                   <div className="grid gap-2">
-                    <Label htmlFor="eventDate">Event Date</Label>
+                    <Label htmlFor="eventDate">Event Date & Time</Label>
                     <Input
                       id="eventDate"
-                      type="date"
+                      type="datetime-local"
                       value={formEventDate}
                       onChange={(e) => setFormEventDate(e.target.value)}
                     />
                   </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="evaluationStart">Evaluation Start Time</Label>
+                    <Input
+                      id="evaluationStart"
+                      type="datetime-local"
+                      value={formEvaluationStart}
+                      onChange={(e) => setFormEvaluationStart(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label htmlFor="eventType">Event Type</Label>
                     <Select
@@ -1061,6 +1309,290 @@ export function EventManager() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Panel Manager Dialog */}
+      <Dialog open={panelsDialogOpen} onOpenChange={(open) => {
+        if (!open) {
+          cancelEditPanel();
+        }
+        setPanelsDialogOpen(open);
+      }}>
+        <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg">
+              <FolderKanban className="size-5 text-emerald-600 animate-pulse" />
+              Manage Panels — {activePanelEvent?.name}
+            </DialogTitle>
+            <DialogDescription>
+              Configure evaluation panels, assign coordinators/evaluators, and allocate participants.
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Tabs */}
+          <div className="flex border-b mb-4">
+            <button
+              onClick={() => setPanelMembersTab('panels')}
+              className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${
+                panelMembersTab === 'panels'
+                  ? 'border-emerald-600 text-emerald-600'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Panels & Assignments
+            </button>
+            <button
+              onClick={() => setPanelMembersTab('assign')}
+              className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${
+                panelMembersTab === 'assign'
+                  ? 'border-emerald-600 text-emerald-600'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Member Allocation ({eventMembers.length})
+            </button>
+          </div>
+
+          <div className="overflow-y-auto flex-1 -mx-6 px-6">
+            {panelMembersTab === 'panels' ? (
+              <div className="space-y-6 pb-6">
+                {/* Auto generate panels */}
+                <Card className="bg-muted/30 border-dashed">
+                  <CardContent className="p-4 flex flex-col sm:flex-row items-end justify-between gap-4">
+                    <div className="space-y-2">
+                      <Label className="font-bold">Auto-Generate Panels</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Automatically create panels and distribute all event members sequentially.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-20">
+                        <Input
+                          type="number"
+                          min={1}
+                          max={50}
+                          value={autoPanelCount}
+                          onChange={(e) => setAutoPanelCount(Math.max(1, Number(e.target.value)))}
+                          placeholder="Count"
+                          className="h-9 text-center font-bold"
+                        />
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={handleAutoGeneratePanels}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-xs font-semibold h-9"
+                      >
+                        Generate & Distribute
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Manual create panel */}
+                <Card className={editingPanel ? 'border-emerald-500 bg-emerald-50/10' : ''}>
+                  <CardContent className="p-4 space-y-4">
+                    <h4 className="text-sm font-bold text-foreground">
+                      {editingPanel ? `Edit Panel: ${editingPanel.name}` : 'Create Panel Manually'}
+                    </h4>
+                    <div className="grid sm:grid-cols-3 gap-4">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="panelName">Panel Name</Label>
+                        <Input
+                          id="panelName"
+                          placeholder="e.g. Panel A"
+                          value={newPanelName}
+                          onChange={(e) => setNewPanelName(e.target.value)}
+                          className="h-9"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Coordinators</Label>
+                        <SearchableMultiSelect
+                          placeholder="Select coordinators"
+                          options={coordinators}
+                          selectedIds={newPanelCoords}
+                          onToggle={(userId) =>
+                            setNewPanelCoords((prev) =>
+                              prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+                            )
+                          }
+                          emptyMessage="No coordinators found"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Evaluators</Label>
+                        <SearchableMultiSelect
+                          placeholder="Select evaluators"
+                          options={evaluators}
+                          selectedIds={newPanelEvals}
+                          onToggle={(userId) =>
+                            setNewPanelEvals((prev) =>
+                              prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+                            )
+                          }
+                          emptyMessage="No evaluators found"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 pt-2 border-t">
+                      {editingPanel && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={cancelEditPanel}
+                          className="text-xs font-semibold"
+                        >
+                          Cancel
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        onClick={handleCreatePanel}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-xs font-semibold"
+                      >
+                        {editingPanel ? 'Save Panel' : 'Add Manual Panel'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Panels List */}
+                <div className="space-y-3">
+                  <h4 className="text-sm font-bold text-foreground">Existing Panels</h4>
+                  {panelsLoading ? (
+                    <div className="space-y-2">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </div>
+                  ) : panels.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-6 border rounded-lg border-dashed">
+                      No panels created yet. Create panels manually or use the auto-generator above.
+                    </p>
+                  ) : (
+                    <div className="grid gap-3">
+                      {panels.map((p) => (
+                        <div
+                          key={p.id}
+                          className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 rounded-xl border bg-card gap-4 hover:shadow-sm transition-all"
+                        >
+                          <div className="space-y-1 min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <h5 className="font-semibold text-sm">{p.name}</h5>
+                              <Badge variant="secondary" className="bg-muted text-xs">
+                                {p._count?.teams > 0
+                                  ? `${p._count.teams} teams`
+                                  : `${p._count?.participants || 0} participants`}
+                              </Badge>
+                            </div>
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1 text-xs text-muted-foreground">
+                              <div>
+                                <span className="font-semibold text-foreground text-xs">Coordinators:</span>{' '}
+                                {p.coordinators.length > 0
+                                  ? p.coordinators.map((c: any) => c.user.name).join(', ')
+                                  : 'None'}
+                              </div>
+                              <div>
+                                <span className="font-semibold text-foreground text-xs">Evaluators:</span>{' '}
+                                {p.evaluators.length > 0
+                                  ? p.evaluators.map((e: any) => e.user.name).join(', ')
+                                  : 'None'}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex gap-1 shrink-0 self-end sm:self-center">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="text-muted-foreground hover:bg-accent hover:text-accent-foreground size-8"
+                              onClick={() => startEditPanel(p)}
+                            >
+                              <Pencil className="size-4" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="text-destructive hover:bg-destructive/10 hover:text-destructive size-8"
+                              onClick={() => handleDeletePanel(p.id)}
+                            >
+                              <Trash2 className="size-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              // Member Allocation list
+              <div className="space-y-4 pb-6">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-bold text-foreground">
+                    Allocate {activePanelEvent?.eventType === 'TEAM' ? 'Teams' : 'Participants'} to Panels
+                  </h4>
+                  <p className="text-xs text-muted-foreground">
+                    Changes are saved automatically on selection.
+                  </p>
+                </div>
+
+                {membersLoading ? (
+                  <div className="space-y-2">
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-10 w-full" />
+                  </div>
+                ) : eventMembers.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-8 border rounded-lg border-dashed">
+                    No members/teams registered in this event yet.
+                  </p>
+                ) : (
+                  <div className="border rounded-lg overflow-hidden">
+                    <Table>
+                      <TableHeader className="bg-muted/40">
+                        <TableRow>
+                          <TableHead className="font-semibold text-xs">Name</TableHead>
+                          <TableHead className="font-semibold text-xs">College</TableHead>
+                          <TableHead className="font-semibold w-[200px] text-xs">Assigned Panel</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {eventMembers.map((member) => (
+                          <TableRow key={member.id}>
+                            <TableCell className="font-medium text-sm">{member.name}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{member.college || '—'}</TableCell>
+                            <TableCell>
+                              <Select
+                                value={member.panelId || 'unassigned'}
+                                onValueChange={(val) => handleAssignPanel(member.id, val)}
+                              >
+                                <SelectTrigger className="h-8 text-xs font-medium">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="unassigned">Unassigned</SelectItem>
+                                  {panels.map((p) => (
+                                    <SelectItem key={p.id} value={p.id}>
+                                      {p.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="pt-4 border-t">
+            <Button onClick={() => setPanelsDialogOpen(false)} className="bg-emerald-600 hover:bg-emerald-700">
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </motion.div>
   );
 }

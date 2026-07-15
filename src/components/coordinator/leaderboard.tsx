@@ -14,6 +14,9 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
+  Download,
+  FileText,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import {
@@ -35,6 +38,15 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuthStore } from '@/store/authStore';
 import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 interface AssignedEvent {
   id: string;
@@ -89,7 +101,7 @@ const rankStyles: Record<number, { bg: string; text: string; icon: typeof Trophy
   },
 };
 
-export function Leaderboard() {
+export function Leaderboard({ defaultEventId }: { defaultEventId?: string }) {
   const token = useAuthStore((s) => s.token);
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === 'ADMIN';
@@ -97,15 +109,60 @@ export function Leaderboard() {
   const [programs, setPrograms] = useState<any[]>([]);
   const [selectedProgramId, setSelectedProgramId] = useState<string>('');
   const [events, setEvents] = useState<AssignedEvent[]>([]);
-  const [selectedEventId, setSelectedEventId] = useState<string>('');
+  const [selectedEventId, setSelectedEventId] = useState<string>(defaultEventId || '');
+
+  useEffect(() => {
+    if (defaultEventId) {
+      setSelectedEventId(defaultEventId);
+    }
+  }, [defaultEventId]);
+
+  const selectedEvent = events.find((e) => e.id === selectedEventId);
   const [leaderboardData, setLeaderboardData] = useState<LeaderboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [countdown, setCountdown] = useState(30);
   const [previousRanks, setPreviousRanks] = useState<Record<string, PreviousRank>>({});
+  const [panels, setPanels] = useState<any[]>([]);
+  const [selectedPanelId, setSelectedPanelId] = useState<string>('all');
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const downloadReport = async (type: string, format: string) => {
+    if (!selectedEventId || !token) return;
+    try {
+      const panelParam = selectedPanelId && selectedPanelId !== 'all' ? `&panelId=${selectedPanelId}` : '';
+      const res = await fetch(`/api/reports?type=${type}&format=${format}&eventId=${selectedEventId}${panelParam}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Failed to download report');
+      }
+
+      const contentDisposition = res.headers.get('content-disposition');
+      let filename = `${type}-report.${format === 'doc' ? 'doc' : 'csv'}`;
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="?([^"]+)"?/);
+        if (match && match[1]) {
+          filename = match[1];
+        }
+      }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      a.remove();
+    } catch (err: any) {
+      toast.error(err.message || 'An error occurred during download');
+    }
+  };
 
   // Fetch programs (Admins only)
   useEffect(() => {
@@ -142,7 +199,12 @@ export function Leaderboard() {
         });
         if (res.ok) {
           const data = await res.json();
-          if (data.success) setEvents(data.data);
+          if (data.success) {
+            setEvents(data.data);
+            if (data.data.length === 1) {
+              setSelectedEventId(data.data[0].id);
+            }
+          }
         }
       } catch {
         toast.error('Failed to load events');
@@ -183,29 +245,59 @@ export function Leaderboard() {
   // Reset selected event when program changes
   useEffect(() => {
     setSelectedEventId('');
+    setPanels([]);
+    setSelectedPanelId('all');
     setLeaderboardData(null);
   }, [selectedProgramId]);
+
+  // Fetch panels when event changes
+  useEffect(() => {
+    async function fetchPanels() {
+      if (!selectedEventId || !token) {
+        setPanels([]);
+        setSelectedPanelId('all');
+        return;
+      }
+      try {
+        const res = await fetch(`/api/events/${selectedEventId}/panels`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            setPanels(data.data);
+          }
+        }
+      } catch {
+        // silent
+      }
+    }
+    fetchPanels();
+  }, [selectedEventId, token]);
 
   // Fetch leaderboard
   const fetchLeaderboard = useCallback(async () => {
     if (!selectedEventId || !token) return;
     setDataLoading(true);
     try {
-      const res = await fetch(`/api/leaderboard?eventId=${selectedEventId}`, {
+      const panelParam = selectedPanelId && selectedPanelId !== 'all' ? `&panelId=${selectedPanelId}` : '';
+      const res = await fetch(`/api/leaderboard?eventId=${selectedEventId}${panelParam}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         const data = await res.json();
         if (data.success) {
-          // Save previous ranks for animation
-          if (leaderboardData?.leaderboard) {
-            const prev: Record<string, PreviousRank> = {};
-            leaderboardData.leaderboard.forEach((entry) => {
-              prev[entry.id] = { rank: entry.rank, timestamp: Date.now() };
-            });
-            setPreviousRanks(prev);
-          }
-          setLeaderboardData(data.data);
+          // Save previous ranks for animation using functional state update
+          setLeaderboardData((prevLeaderboardData) => {
+            if (prevLeaderboardData?.leaderboard) {
+              const prevRanks: Record<string, PreviousRank> = {};
+              prevLeaderboardData.leaderboard.forEach((entry) => {
+                prevRanks[entry.id] = { rank: entry.rank, timestamp: Date.now() };
+              });
+              setPreviousRanks(prevRanks);
+            }
+            return data.data;
+          });
           setLastRefresh(new Date());
           setCountdown(30);
         }
@@ -215,16 +307,16 @@ export function Leaderboard() {
     } finally {
       setDataLoading(false);
     }
-  }, [selectedEventId, token]);
+  }, [selectedEventId, selectedPanelId, token]);
 
-  // Fetch when event changes
+  // Fetch when event or panel changes
   useEffect(() => {
     if (selectedEventId) {
       fetchLeaderboard();
     } else {
       setLeaderboardData(null);
     }
-  }, [selectedEventId, fetchLeaderboard]);
+  }, [selectedEventId, selectedPanelId, fetchLeaderboard]);
 
   // Auto-refresh interval
   useEffect(() => {
@@ -304,7 +396,15 @@ export function Leaderboard() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle className="text-lg">Live Leaderboard</CardTitle>
-              <CardDescription>Real-time rankings with auto-refresh</CardDescription>
+              <CardDescription className="flex items-center gap-1.5 mt-0.5">
+                <span>Real-time rankings with auto-refresh</span>
+                {selectedEventId && (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full font-medium ml-1.5">
+                    <RefreshCw className={`h-2.5 w-2.5 ${dataLoading ? 'animate-spin' : ''}`} />
+                    <span>reloads in {countdown}s</span>
+                  </span>
+                )}
+              </CardDescription>
             </div>
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
               {isAdmin && (
@@ -324,29 +424,125 @@ export function Leaderboard() {
                   </SelectContent>
                 </Select>
               )}
-              <Select
-                value={selectedEventId}
-                onValueChange={setSelectedEventId}
-                disabled={isAdmin && !selectedProgramId}
-              >
-                <SelectTrigger className="w-[220px]">
-                  <SelectValue placeholder={isAdmin && !selectedProgramId ? "Choose program first..." : "Select event..."} />
-                </SelectTrigger>
-                <SelectContent>
-                  {events.map((event) => (
-                    <SelectItem key={event.id} value={event.id}>
-                      {event.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {isAdmin || events.length > 1 ? (
+                <Select
+                  value={selectedEventId}
+                  onValueChange={(v) => {
+                    setSelectedEventId(v);
+                    setSelectedPanelId('all');
+                  }}
+                  disabled={isAdmin && !selectedProgramId}
+                >
+                  <SelectTrigger className="w-[220px]">
+                    <SelectValue placeholder={isAdmin && !selectedProgramId ? "Choose program first..." : "Select event..."} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {events.map((event) => (
+                      <SelectItem key={event.id} value={event.id}>
+                        {event.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : selectedEvent ? (
+                <Badge variant="outline" className="text-sm font-semibold px-3 py-1.5 bg-muted/40">
+                  Event: {selectedEvent.name}
+                </Badge>
+              ) : null}
+              {selectedEventId && panels.length > 0 && (
+                <Select
+                  value={selectedPanelId}
+                  onValueChange={setSelectedPanelId}
+                >
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="All Panels" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Panels</SelectItem>
+                    {panels.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
               {selectedEventId && (
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground self-end sm:self-auto">
-                  <RefreshCw
-                    className={`h-3.5 w-3.5 ${dataLoading ? 'animate-spin' : ''}`}
-                  />
-                  <span>{countdown}s</span>
-                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2 border-emerald-200 hover:bg-emerald-50 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 font-semibold cursor-pointer"
+                    >
+                      <Download className="h-4 w-4" />
+                      <span>Download Reports</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuLabel>Microsoft Word (.doc)</DropdownMenuLabel>
+                    <DropdownMenuItem
+                      onClick={() => downloadReport('event-results', 'doc')}
+                      className="cursor-pointer gap-2"
+                    >
+                      <FileText className="h-4 w-4 text-emerald-600" />
+                      <span>Detailed Evaluations</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() =>
+                        downloadReport(
+                          selectedEvent?.eventType === 'TEAM'
+                            ? 'team-rankings'
+                            : 'individual-rankings',
+                          'doc'
+                        )
+                      }
+                      className="cursor-pointer gap-2"
+                    >
+                      <FileText className="h-4 w-4 text-emerald-600" />
+                      <span>Event Rankings</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => downloadReport('evaluator-report', 'doc')}
+                      className="cursor-pointer gap-2"
+                    >
+                      <FileText className="h-4 w-4 text-emerald-600" />
+                      <span>Evaluator Status</span>
+                    </DropdownMenuItem>
+
+                    <DropdownMenuSeparator />
+
+                    <DropdownMenuLabel>CSV Spreadsheet (.csv)</DropdownMenuLabel>
+                    <DropdownMenuItem
+                      onClick={() => downloadReport('event-results', 'csv')}
+                      className="cursor-pointer gap-2"
+                    >
+                      <FileSpreadsheet className="h-4 w-4 text-teal-600" />
+                      <span>Detailed Evaluations</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() =>
+                        downloadReport(
+                          selectedEvent?.eventType === 'TEAM'
+                            ? 'team-rankings'
+                            : 'individual-rankings',
+                            'csv'
+                        )
+                      }
+                      className="cursor-pointer gap-2"
+                    >
+                      <FileSpreadsheet className="h-4 w-4 text-teal-600" />
+                      <span>Event Rankings</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => downloadReport('evaluator-report', 'csv')}
+                      className="cursor-pointer gap-2"
+                    >
+                      <FileSpreadsheet className="h-4 w-4 text-teal-600" />
+                      <span>Evaluator Status</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               )}
             </div>
           </div>

@@ -15,11 +15,16 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const eventId = searchParams.get('eventId');
     const evaluatorId = searchParams.get('evaluatorId');
+    const panelId = searchParams.get('panelId');
 
     const where: any = {};
 
     if (eventId) {
       where.eventId = eventId;
+    }
+
+    if (panelId) {
+      where.panelId = panelId;
     }
 
     // Role-based filtering
@@ -29,25 +34,56 @@ export async function GET(request: NextRequest) {
         where.evaluatorId = evaluatorId;
       }
     } else if (payload.role === 'COORDINATOR') {
-      // Coordinator sees evaluations from assigned events
       const assignments = await db.eventCoordinator.findMany({
         where: { userId: payload.userId },
         select: { eventId: true },
       });
       const assignedEventIds = assignments.map((a) => a.eventId);
+
+      const panelAssignments = await db.panelCoordinator.findMany({
+        where: { userId: payload.userId },
+        select: { panel: { select: { id: true, eventId: true } } },
+      });
+      const panelAssignedEventIds = panelAssignments.map((pa) => pa.panel.eventId);
+
+      const allAssignedEventIds = Array.from(new Set([...assignedEventIds, ...panelAssignedEventIds]));
+
       if (eventId) {
-        if (!assignedEventIds.includes(eventId)) {
+        if (!allAssignedEventIds.includes(eventId)) {
           return NextResponse.json(
-            { success: false, error: 'Forbidden: Not assigned to this event' },
+            { success: false, error: 'Forbidden: Not assigned to this event or its panels' },
             { status: 403 }
           );
         }
+
+        const specificPanels = panelAssignments.filter((pa) => pa.panel.eventId === eventId).map((pa) => pa.panel.id);
+        if (specificPanels.length > 0) {
+          if (panelId) {
+            if (!specificPanels.includes(panelId)) {
+              return NextResponse.json(
+                { success: false, error: 'Forbidden: Not assigned to this panel' },
+                { status: 403 }
+              );
+            }
+            where.panelId = panelId;
+          } else {
+            where.panelId = { in: specificPanels };
+          }
+        } else if (panelId) {
+          where.panelId = panelId;
+        }
       } else {
-        where.eventId = { in: assignedEventIds };
+        where.OR = [
+          { eventId: { in: assignedEventIds } },
+          { panelId: { in: panelAssignments.map((pa) => pa.panel.id) } },
+        ];
       }
     } else if (payload.role === 'EVALUATOR') {
       // Evaluator sees only own evaluations
       where.evaluatorId = payload.userId;
+      if (panelId) {
+        where.panelId = panelId;
+      }
     }
 
     const evaluations = await db.evaluation.findMany({
@@ -124,17 +160,77 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Evaluator must be assigned to the event (unless admin)
+    const event = await db.event.findUnique({
+      where: { id: eventId },
+    });
+
+    if (!event || event.status === 'DELETED') {
+      return NextResponse.json(
+        { success: false, error: 'Event not found' },
+        { status: 404 }
+      );
+    }
+
+    // Check evaluation start time
+    if (event.evaluationStart && new Date() < new Date(event.evaluationStart)) {
+      return NextResponse.json(
+        { success: false, error: 'Evaluation has not started yet. Please wait until the scheduled evaluation time.' },
+        { status: 403 }
+      );
+    }
+
+    let targetPanelId: string | null = null;
+    if (teamId) {
+      const team = await db.team.findUnique({ where: { id: teamId } });
+      if (team) targetPanelId = team.panelId;
+    } else if (participantId) {
+      const participant = await db.participant.findUnique({ where: { id: participantId } });
+      if (participant) targetPanelId = participant.panelId;
+    }
+
+    // Evaluator must be assigned to the event OR the specific panel (unless admin)
     if (requireRole('EVALUATOR')(payload) && !requireRole('ADMIN')(payload)) {
-      const isAssigned = await db.eventEvaluator.findUnique({
+      // 1. Check if the evaluator is assigned directly at the event level
+      const isEventAssigned = await db.eventEvaluator.findUnique({
         where: { eventId_userId: { eventId, userId: payload.userId } },
       });
-      if (!isAssigned) {
-        return NextResponse.json(
-          { success: false, error: 'Forbidden: Not assigned to this event' },
-          { status: 403 }
-        );
+
+      // 2. If not assigned at the event level, check if they are assigned to the target panel
+      if (!isEventAssigned) {
+        if (targetPanelId) {
+          const isPanelAssigned = await db.panelEvaluator.findFirst({
+            where: { panelId: targetPanelId, userId: payload.userId },
+          });
+          if (!isPanelAssigned) {
+            return NextResponse.json(
+              { success: false, error: 'Forbidden: Not assigned to the evaluation panel for this participant/team' },
+              { status: 403 }
+            );
+          }
+        } else {
+          return NextResponse.json(
+            { success: false, error: 'Forbidden: Not assigned to this event' },
+            { status: 403 }
+          );
+        }
       }
+    }
+
+    // Check if an evaluation has already been submitted for this team/participant by this evaluator
+    const existingSubmitted = await db.evaluation.findFirst({
+      where: {
+        eventId,
+        evaluatorId: payload.userId,
+        status: 'SUBMITTED',
+        ...(teamId ? { teamId } : { participantId }),
+      },
+    });
+
+    if (existingSubmitted) {
+      return NextResponse.json(
+        { success: false, error: 'This team/participant has already been evaluated and submitted.' },
+        { status: 400 }
+      );
     }
 
     // Calculate total score
@@ -149,6 +245,7 @@ export async function POST(request: NextRequest) {
         teamId: teamId || null,
         participantId: participantId || null,
         evaluatorId: payload.userId,
+        panelId: targetPanelId,
         status: status || 'DRAFT',
         totalScore,
         comments: comments || null,

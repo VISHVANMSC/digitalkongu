@@ -30,6 +30,7 @@ import {
   FilePenLine,
   ArrowLeft,
   Loader2,
+  CalendarDays,
 } from 'lucide-react';
 
 /* ---------- Types ---------- */
@@ -49,6 +50,7 @@ interface EventData {
   eventType: string;
   evaluationMode: string;
   maxStarRating: number;
+  evaluationStart: string | null;
   criteria: Criteria[];
   _count: { teams: number; participants: number };
 }
@@ -89,15 +91,53 @@ interface ExistingEvaluation {
 interface EvaluationFormProps {
   initialDraftToEdit?: any;
   onClearDraftToEdit?: () => void;
+  defaultEventId?: string;
 }
 
-export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit }: EvaluationFormProps = {}) {
+export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit, defaultEventId }: EvaluationFormProps = {}) {
   const token = useAuthStore((s) => s.token);
 
   // Step 1: Event selection
   const [events, setEvents] = useState<EventData[]>([]);
-  const [selectedEventId, setSelectedEventId] = useState<string>('');
+  const [selectedEventId, setSelectedEventId] = useState<string>(defaultEventId || '');
   const [eventsLoading, setEventsLoading] = useState(true);
+
+  const [panels, setPanels] = useState<any[]>([]);
+  const [selectedPanelId, setSelectedPanelId] = useState<string>('');
+
+  useEffect(() => {
+    if (defaultEventId) {
+      setSelectedEventId(defaultEventId);
+    }
+  }, [defaultEventId]);
+
+  useEffect(() => {
+    if (!selectedEventId || !token) {
+      setPanels([]);
+      setSelectedPanelId('');
+      return;
+    }
+
+    async function fetchPanels() {
+      try {
+        const res = await fetch(`/api/events/${selectedEventId}/panels`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            setPanels(data.data);
+            if (data.data.length > 0) {
+              setSelectedPanelId(data.data[0].id);
+            }
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    fetchPanels();
+  }, [selectedEventId, token]);
 
   // Step 2: Team/Participant selection
   const [teams, setTeams] = useState<TeamData[]>([]);
@@ -178,6 +218,11 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit }: Evalu
     }, 0);
   }, [scores, selectedEvent, isMarksMode]);
 
+  const isLocked = useMemo(() => {
+    if (!selectedEvent || !selectedEvent.evaluationStart) return false;
+    return new Date() < new Date(selectedEvent.evaluationStart);
+  }, [selectedEvent]);
+
   /* ---------- Fetch Events ---------- */
   useEffect(() => {
     if (!token) return;
@@ -199,7 +244,11 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit }: Evalu
               return detailData.success ? detailData.data : null;
             })
           );
-          setEvents(detailedEvents.filter(Boolean));
+          const filteredEvents = detailedEvents.filter(Boolean);
+          setEvents(filteredEvents);
+          if (filteredEvents.length === 1) {
+            setSelectedEventId(filteredEvents[0].id);
+          }
         }
       } catch {
         toast.error('Failed to load events');
@@ -222,14 +271,15 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit }: Evalu
     const fetchEntities = async () => {
       setEntitiesLoading(true);
       try {
+        const panelParam = selectedPanelId ? `&panelId=${selectedPanelId}` : '';
         const [teamsRes, participantsRes, evalsRes] = await Promise.all([
-          fetch(`/api/teams?eventId=${selectedEventId}`, {
+          fetch(`/api/teams?eventId=${selectedEventId}${panelParam}`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch(`/api/participants?eventId=${selectedEventId}`, {
+          fetch(`/api/participants?eventId=${selectedEventId}${panelParam}`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch(`/api/evaluations?eventId=${selectedEventId}`, {
+          fetch(`/api/evaluations?eventId=${selectedEventId}${panelParam}`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
         ]);
@@ -249,7 +299,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit }: Evalu
     };
 
     fetchEntities();
-  }, [token, selectedEventId]);
+  }, [token, selectedEventId, selectedPanelId]);
 
   /* ---------- Initialize scores when event selected ---------- */
   useEffect(() => {
@@ -416,51 +466,121 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit }: Evalu
                 </CardTitle>
               </CardHeader>
               <CardContent className="px-6 pb-6">
-                <Select
-                  value={selectedEventId}
-                  onValueChange={(v) => {
-                    setSelectedEventId(v);
-                    setSelectedEntityId('');
-                    setEditingEval(null);
-                  }}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Choose an event to evaluate..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {events.map((event) => (
-                      <SelectItem key={event.id} value={event.id}>
-                        <span className="flex items-center gap-2">
-                          {event.eventType === 'TEAM' ? (
-                            <Users className="size-3.5" />
-                          ) : (
-                            <User className="size-3.5" />
-                          )}
-                          {event.name}
-                          <span className="text-muted-foreground text-xs">
-                            ({event.evaluationMode})
+                {events.length > 1 ? (
+                  <Select
+                    value={selectedEventId}
+                    onValueChange={(v) => {
+                      setSelectedEventId(v);
+                      setSelectedEntityId('');
+                      setEditingEval(null);
+                    }}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Choose an event to evaluate..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {events.map((event) => (
+                        <SelectItem key={event.id} value={event.id}>
+                          <span className="flex items-center gap-2">
+                            {event.eventType === 'TEAM' ? (
+                              <Users className="size-3.5" />
+                            ) : (
+                              <User className="size-3.5" />
+                            )}
+                            {event.name}
+                            <span className="text-muted-foreground text-xs">
+                              ({event.evaluationMode})
+                            </span>
                           </span>
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : selectedEvent ? (
+                  <div className="p-3 border rounded-lg bg-muted/40 font-semibold flex items-center gap-2 text-sm">
+                    {selectedEvent.eventType === 'TEAM' ? (
+                      <Users className="size-4 text-emerald-600" />
+                    ) : (
+                      <User className="size-4 text-emerald-600" />
+                    )}
+                    <span>{selectedEvent.name}</span>
+                    <Badge variant="outline" className="text-xs">
+                      {selectedEvent.evaluationMode}
+                    </Badge>
+                  </div>
+                ) : (
+                  <div className="p-3 border rounded-lg bg-muted/40 text-muted-foreground text-sm italic">
+                    No event available
+                  </div>
+                )}
+
+                {selectedEventId && panels.length > 0 && (
+                  <div className="mt-4 space-y-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                      Select Panel
+                    </label>
+                    {panels.length > 1 ? (
+                      <Select
+                        value={selectedPanelId}
+                        onValueChange={(v) => {
+                          setSelectedPanelId(v);
+                          setSelectedEntityId('');
+                          setEditingEval(null);
+                        }}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Choose a panel..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {panels.map((p) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <div className="p-3 border rounded-lg bg-muted/20 text-sm font-medium">
+                        Panel: <span className="text-emerald-600 font-semibold">{panels[0].name}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
 
             {/* Step 2: Entity Selection */}
             {selectedEventId && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <span className="flex size-6 items-center justify-center rounded-full bg-teal-100 text-teal-700 text-xs font-bold">
-                      2
-                    </span>
-                    {isTeamEvent ? 'Select Team' : 'Select Participant'}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="px-6 pb-6">
-                  {entitiesLoading ? (
+              isLocked ? (
+                <Card className="border-amber-200 bg-amber-50/20 backdrop-blur-sm overflow-hidden relative">
+                  <div className="absolute top-0 right-0 p-4 opacity-5">
+                    <CalendarDays className="size-48 text-amber-500" />
+                  </div>
+                  <CardContent className="p-8 flex flex-col items-center justify-center text-center space-y-4 max-w-lg mx-auto">
+                    <div className="size-16 rounded-2xl bg-amber-100 flex items-center justify-center text-amber-700 animate-pulse">
+                      <CalendarDays className="size-8" />
+                    </div>
+                    <h3 className="font-bold text-lg text-amber-900">Evaluation hasn't started yet!</h3>
+                    <p className="text-sm text-amber-800 font-medium leading-relaxed">
+                      Evaluation has not started yet. Please wait until the scheduled evaluation time.
+                    </p>
+                    <div className="bg-amber-100/60 border border-amber-200 px-4 py-2 rounded-xl text-sm font-semibold text-amber-950">
+                      Starts on: {new Date(selectedEvent!.evaluationStart!).toLocaleString()}
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <span className="flex size-6 items-center justify-center rounded-full bg-teal-100 text-teal-700 text-xs font-bold">
+                        2
+                      </span>
+                      {isTeamEvent ? 'Select Team' : 'Select Participant'}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="px-6 pb-6">
+                    {entitiesLoading ? (
                     <div className="space-y-2">
                       {Array.from({ length: 3 }).map((_, i) => (
                         <Skeleton key={i} className="h-12 rounded-lg" />
@@ -479,6 +599,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit }: Evalu
                               <button
                                 key={team.id}
                                 type="button"
+                                disabled={isEvaluated}
                                 onClick={() => {
                                   setSelectedEntityType('team');
                                   setSelectedEntityId(team.id);
@@ -499,19 +620,21 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit }: Evalu
                                   }
                                 }}
                                 className={`flex items-center justify-between p-3 rounded-lg border transition-all text-left ${
-                                  isSelected
-                                    ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500'
-                                    : 'border-border hover:border-emerald-300 hover:bg-emerald-50/50'
+                                  isEvaluated
+                                    ? 'border-green-200 bg-green-50/40 dark:bg-green-950/20 dark:border-green-900/30 cursor-not-allowed text-green-900 dark:text-green-300'
+                                    : isSelected
+                                      ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 ring-1 ring-emerald-500'
+                                      : 'border-border hover:border-emerald-300 hover:bg-emerald-50/50'
                                 }`}
                               >
                                 <div className="min-w-0 flex-1">
                                   <p className="font-medium text-sm truncate">{team.name}</p>
                                   {team.college && (
-                                    <p className="text-xs text-muted-foreground truncate">
+                                    <p className={`text-xs truncate ${isEvaluated ? 'text-green-700/80 dark:text-green-400/80' : 'text-muted-foreground'}`}>
                                       {team.college}
                                     </p>
                                   )}
-                                  <p className="text-xs text-muted-foreground">
+                                  <p className={`text-xs ${isEvaluated ? 'text-green-700/80 dark:text-green-400/80' : 'text-muted-foreground'}`}>
                                     {team._count.members} members
                                   </p>
                                 </div>
@@ -543,6 +666,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit }: Evalu
                                 <button
                                   key={participant.id}
                                   type="button"
+                                  disabled={isEvaluated}
                                   onClick={() => {
                                     setSelectedEntityType('participant');
                                     setSelectedEntityId(participant.id);
@@ -563,9 +687,11 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit }: Evalu
                                     }
                                   }}
                                   className={`flex items-center justify-between p-3 rounded-lg border transition-all text-left ${
-                                    isSelected
-                                      ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500'
-                                      : 'border-border hover:border-emerald-300 hover:bg-emerald-50/50'
+                                    isEvaluated
+                                      ? 'border-green-200 bg-green-50/40 dark:bg-green-950/20 dark:border-green-900/30 cursor-not-allowed text-green-900 dark:text-green-300'
+                                      : isSelected
+                                        ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 ring-1 ring-emerald-500'
+                                        : 'border-border hover:border-emerald-300 hover:bg-emerald-50/50'
                                   }`}
                                 >
                                   <div className="min-w-0 flex-1">
@@ -573,7 +699,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit }: Evalu
                                       {participant.name}
                                     </p>
                                     {participant.college && (
-                                      <p className="text-xs text-muted-foreground truncate">
+                                      <p className={`text-xs truncate ${isEvaluated ? 'text-green-700/80 dark:text-green-400/80' : 'text-muted-foreground'}`}>
                                         {participant.college}
                                       </p>
                                     )}
@@ -598,7 +724,7 @@ export function EvaluationForm({ initialDraftToEdit, onClearDraftToEdit }: Evalu
                   )}
                 </CardContent>
               </Card>
-            )}
+            ))}
           </motion.div>
         ) : (
           selectedEventId && selectedEvent && (

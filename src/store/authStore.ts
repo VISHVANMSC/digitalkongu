@@ -8,6 +8,7 @@ export interface User {
   role: 'ADMIN' | 'COORDINATOR' | 'EVALUATOR';
   phone?: string;
   organization?: string;
+  canEdit?: boolean;
 }
 
 export interface AuthState {
@@ -39,7 +40,7 @@ export const useAuthStore = create<AuthState>()(
       setHydrated: () => set({ _hydrated: true }),
     }),
     {
-      name: 'eventforge-auth',
+      name: 'digitalkongu-auth',
       partialize: (state) => ({
         user: state.user,
         token: state.token,

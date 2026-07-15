@@ -37,6 +37,17 @@ interface DashboardStats {
   totalEvaluations: number;
   submittedEvaluations: number;
   draftEvaluations: number;
+  panelMonitor?: Array<{
+    id: string;
+    name: string;
+    eventId: string;
+    eventName: string;
+    coordinators: string[];
+    evaluators: string[];
+    totalEntities: number;
+    completedEvaluations: number;
+    averageScore: number;
+  }>;
 }
 
 interface ProgramEventCount {
@@ -283,6 +294,73 @@ export function AdminDashboard() {
           </CardContent>
         </Card>
       </motion.div>
+
+      {stats?.panelMonitor && stats.panelMonitor.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.7, duration: 0.5 }}
+        >
+          <Card className="shadow-sm">
+            <CardContent className="p-6">
+              <div className="flex items-center gap-2 mb-6">
+                <ClipboardList className="h-5 w-5 text-emerald-600 animate-pulse" />
+                <h3 className="text-lg font-semibold text-foreground">Real-Time Panel Progress Monitor</h3>
+              </div>
+              <div className="border rounded-lg overflow-hidden bg-card">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-muted/40 border-b">
+                        <th className="p-3 text-xs font-semibold text-muted-foreground uppercase">Event & Panel</th>
+                        <th className="p-3 text-xs font-semibold text-muted-foreground uppercase">Coordinators & Evaluators</th>
+                        <th className="p-3 text-xs font-semibold text-muted-foreground uppercase">Progress</th>
+                        <th className="p-3 text-xs font-semibold text-muted-foreground uppercase text-right">Avg Score</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {stats.panelMonitor.map((pm) => {
+                        const percent = pm.totalEntities > 0 ? Math.round((pm.completedEvaluations / pm.totalEntities) * 100) : 0;
+                        return (
+                          <tr key={pm.id} className="hover:bg-muted/10 transition-colors">
+                            <td className="p-3">
+                              <div className="font-semibold text-sm text-foreground">{pm.name}</div>
+                              <div className="text-xs text-muted-foreground">{pm.eventName}</div>
+                            </td>
+                            <td className="p-3 space-y-1">
+                              <div className="text-xs text-muted-foreground">
+                                <span className="font-medium text-foreground">Coord:</span> {pm.coordinators.join(', ') || '—'}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                <span className="font-medium text-foreground">Eval:</span> {pm.evaluators.join(', ') || '—'}
+                              </div>
+                            </td>
+                            <td className="p-3 min-w-[200px]">
+                              <div className="flex items-center justify-between text-xs mb-1">
+                                <span className="font-medium text-foreground">{pm.completedEvaluations} / {pm.totalEntities} Evaluated</span>
+                                <span className="font-bold text-muted-foreground">{percent}%</span>
+                              </div>
+                              <div className="w-full bg-muted dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                                <div
+                                  className="bg-emerald-600 h-full rounded-full transition-all duration-500"
+                                  style={{ width: `${percent}%` }}
+                                />
+                              </div>
+                            </td>
+                            <td className="p-3 text-right font-bold text-sm text-emerald-700 dark:text-emerald-400">
+                              {pm.averageScore || '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
     </div>
   );
 }

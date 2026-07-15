@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const eventId = searchParams.get('eventId');
+    const panelId = searchParams.get('panelId');
 
     if (!eventId) {
       return NextResponse.json(
@@ -34,31 +35,72 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const where: any = { eventId, status: 'SUBMITTED' };
+
+    // Role-based access and panel isolation checks
     if (payload.role === 'COORDINATOR') {
-      const isAssigned = await db.eventCoordinator.findUnique({
+      const isEventCoord = await db.eventCoordinator.findUnique({
         where: { eventId_userId: { eventId, userId: payload.userId } },
       });
-      if (!isAssigned) {
+      const panelAssignments = await db.panelCoordinator.findMany({
+        where: { userId: payload.userId, panel: { eventId } },
+        select: { panelId: true },
+      });
+      const assignedPanelIds = panelAssignments.map((pa) => pa.panelId);
+
+      if (!isEventCoord && panelAssignments.length === 0) {
         return NextResponse.json(
-          { success: false, error: 'Forbidden: Not assigned to this event' },
+          { success: false, error: 'Forbidden: Not assigned to this event or its panels' },
           { status: 403 }
         );
+      }
+
+      if (panelId) {
+        if (!isEventCoord && !assignedPanelIds.includes(panelId)) {
+          return NextResponse.json(
+            { success: false, error: 'Forbidden: Not assigned to this panel' },
+            { status: 403 }
+          );
+        }
+        where.panelId = panelId;
+      } else if (!isEventCoord) {
+        where.panelId = { in: assignedPanelIds };
       }
     } else if (payload.role === 'EVALUATOR') {
-      const isAssigned = await db.eventEvaluator.findUnique({
+      const isEventEval = await db.eventEvaluator.findUnique({
         where: { eventId_userId: { eventId, userId: payload.userId } },
       });
-      if (!isAssigned) {
+      const panelAssignments = await db.panelEvaluator.findMany({
+        where: { userId: payload.userId, panel: { eventId } },
+        select: { panelId: true },
+      });
+      const assignedPanelIds = panelAssignments.map((pa) => pa.panelId);
+
+      if (!isEventEval && panelAssignments.length === 0) {
         return NextResponse.json(
-          { success: false, error: 'Forbidden: Not assigned to this event' },
+          { success: false, error: 'Forbidden: Not assigned to this event or its panels' },
           { status: 403 }
         );
       }
+
+      if (panelId) {
+        if (!isEventEval && !assignedPanelIds.includes(panelId)) {
+          return NextResponse.json(
+            { success: false, error: 'Forbidden: Not assigned to this panel' },
+            { status: 403 }
+          );
+        }
+        where.panelId = panelId;
+      } else if (!isEventEval) {
+        where.panelId = { in: assignedPanelIds };
+      }
+    } else if (payload.role === 'ADMIN' && panelId) {
+      where.panelId = panelId;
     }
 
-    // Get all submitted evaluations for the event
+    // Get all submitted evaluations for the event (filtered by panel where appropriate)
     const evaluations = await db.evaluation.findMany({
-      where: { eventId, status: 'SUBMITTED' },
+      where,
       include: {
         team: { select: { id: true, name: true, college: true } },
         participant: { select: { id: true, name: true, college: true } },
@@ -87,12 +129,8 @@ export async function GET(request: NextRequest) {
       const entityCollege = evaluation.team?.college || evaluation.participant?.college || null;
       const entityType = evaluation.teamId ? 'team' as const : 'participant' as const;
 
-      // Calculate weighted score for this evaluation
-      let evalScore = 0;
-      for (const score of evaluation.scores) {
-        const weightage = score.criteria.weightage || 1;
-        evalScore += score.score * weightage;
-      }
+      // Use total score directly from the evaluation
+      const evalScore = evaluation.totalScore;
 
       if (!entityId) continue;
 

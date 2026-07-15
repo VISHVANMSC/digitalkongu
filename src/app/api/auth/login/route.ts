@@ -76,6 +76,7 @@ export async function POST(request: NextRequest) {
           role: user.role,
           phone: user.phone,
           organization: user.organization,
+          canEdit: user.canEdit,
         },
       },
     });

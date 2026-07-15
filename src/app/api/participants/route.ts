@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const eventId = searchParams.get('eventId');
+    const panelId = searchParams.get('panelId');
 
     const where: any = {};
 
@@ -28,16 +29,44 @@ export async function GET(request: NextRequest) {
         select: { eventId: true },
       });
       const assignedEventIds = assignments.map((a) => a.eventId);
+
+      const panelAssignments = await db.panelCoordinator.findMany({
+        where: { userId: payload.userId },
+        select: { panel: { select: { id: true, eventId: true } } },
+      });
+      const panelAssignedEventIds = panelAssignments.map((pa) => pa.panel.eventId);
+
+      const allAssignedEventIds = Array.from(new Set([...assignedEventIds, ...panelAssignedEventIds]));
+
       if (eventId) {
-        // If filtering by specific event, check if assigned
-        if (!assignedEventIds.includes(eventId)) {
+        if (!allAssignedEventIds.includes(eventId)) {
           return NextResponse.json(
-            { success: false, error: 'Forbidden: Not assigned to this event' },
+            { success: false, error: 'Forbidden: Not assigned to this event or its panels' },
             { status: 403 }
           );
         }
+
+        const specificPanels = panelAssignments.filter((pa) => pa.panel.eventId === eventId).map((pa) => pa.panel.id);
+        if (specificPanels.length > 0) {
+          if (panelId) {
+            if (!specificPanels.includes(panelId)) {
+              return NextResponse.json(
+                { success: false, error: 'Forbidden: Not assigned to this panel' },
+                { status: 403 }
+              );
+            }
+            where.panelId = panelId;
+          } else {
+            where.panelId = { in: specificPanels };
+          }
+        } else if (panelId) {
+          where.panelId = panelId;
+        }
       } else {
-        where.eventId = { in: assignedEventIds };
+        where.OR = [
+          { eventId: { in: assignedEventIds } },
+          { panelId: { in: panelAssignments.map((pa) => pa.panel.id) } },
+        ];
       }
     } else if (payload.role === 'EVALUATOR') {
       const assignments = await db.eventEvaluator.findMany({
@@ -45,15 +74,44 @@ export async function GET(request: NextRequest) {
         select: { eventId: true },
       });
       const assignedEventIds = assignments.map((a) => a.eventId);
+
+      const panelAssignments = await db.panelEvaluator.findMany({
+        where: { userId: payload.userId },
+        select: { panel: { select: { id: true, eventId: true } } },
+      });
+      const panelAssignedEventIds = panelAssignments.map((pa) => pa.panel.eventId);
+
+      const allAssignedEventIds = Array.from(new Set([...assignedEventIds, ...panelAssignedEventIds]));
+
       if (eventId) {
-        if (!assignedEventIds.includes(eventId)) {
+        if (!allAssignedEventIds.includes(eventId)) {
           return NextResponse.json(
-            { success: false, error: 'Forbidden: Not assigned to this event' },
+            { success: false, error: 'Forbidden: Not assigned to this event or its panels' },
             { status: 403 }
           );
         }
+
+        const specificPanels = panelAssignments.filter((pa) => pa.panel.eventId === eventId).map((pa) => pa.panel.id);
+        if (specificPanels.length > 0) {
+          if (panelId) {
+            if (!specificPanels.includes(panelId)) {
+              return NextResponse.json(
+                { success: false, error: 'Forbidden: Not assigned to this panel' },
+                { status: 403 }
+              );
+            }
+            where.panelId = panelId;
+          } else {
+            where.panelId = { in: specificPanels };
+          }
+        } else if (panelId) {
+          where.panelId = panelId;
+        }
       } else {
-        where.eventId = { in: assignedEventIds };
+        where.OR = [
+          { eventId: { in: assignedEventIds } },
+          { panelId: { in: panelAssignments.map((pa) => pa.panel.id) } },
+        ];
       }
     }
 
@@ -113,16 +171,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Coordinator must be assigned to the event
+    // Coordinator must be assigned to the event or its panels
+    let assignedPanelId: string | null = null;
     if (isCoordinator && !isAdmin) {
+      const dbUser = await db.user.findUnique({
+        where: { id: payload.userId },
+        select: { canEdit: true },
+      });
+      if (!dbUser || !dbUser.canEdit) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden: Coordinator does not have editing rights' },
+          { status: 403 }
+        );
+      }
+
       const isAssigned = await db.eventCoordinator.findUnique({
         where: { eventId_userId: { eventId, userId: payload.userId } },
       });
-      if (!isAssigned) {
+
+      const panelAssignments = await db.panelCoordinator.findMany({
+        where: { userId: payload.userId, panel: { eventId } },
+        select: { panelId: true },
+      });
+
+      if (!isAssigned && panelAssignments.length === 0) {
         return NextResponse.json(
-          { success: false, error: 'Forbidden: Not assigned to this event' },
+          { success: false, error: 'Forbidden: Not assigned to this event or its panels' },
           { status: 403 }
         );
+      }
+
+      if (panelAssignments.length > 0) {
+        assignedPanelId = panelAssignments[0].panelId;
       }
     }
 
@@ -130,6 +210,7 @@ export async function POST(request: NextRequest) {
       data: {
         eventId,
         teamId: teamId || null,
+        panelId: assignedPanelId || body.panelId || null,
         name,
         registerNumber: registerNumber || null,
         department: department || null,
@@ -161,3 +242,76 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const payload = await authenticateRequest(request);
+    if (!payload) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    const isAdmin = requireRole('ADMIN')(payload);
+    const isCoordinator = requireRole('COORDINATOR')(payload);
+
+    if (!isAdmin && !isCoordinator) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden: Admin or Coordinator access required' },
+        { status: 403 }
+      );
+    }
+
+    // Coordinator must have canEdit privileges
+    if (isCoordinator && !isAdmin) {
+      const dbUser = await db.user.findUnique({
+        where: { id: payload.userId },
+        select: { canEdit: true },
+      });
+      if (!dbUser || !dbUser.canEdit) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden: Coordinator does not have editing rights' },
+          { status: 403 }
+        );
+      }
+    }
+
+    const body = await request.json();
+    const { ids } = body;
+
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return NextResponse.json(
+        { success: false, error: 'Array of participant IDs is required' },
+        { status: 400 }
+      );
+    }
+
+    await db.participant.deleteMany({
+      where: {
+        id: { in: ids },
+      },
+    });
+
+    await db.auditLog.create({
+      data: {
+        userId: payload.userId,
+        action: 'BULK_DELETE',
+        entity: 'Participant',
+        details: `Bulk deleted ${ids.length} participants`,
+      },
+    });
+
+    return NextResponse.json({
+      success: true,
+      data: { message: 'Participants deleted successfully' },
+    });
+  } catch (error) {
+    console.error('Bulk delete participants error:', error);
+    return NextResponse.json(
+      { success: false, error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+

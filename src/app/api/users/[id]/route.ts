@@ -33,6 +33,7 @@ export async function GET(
         email: true,
         role: true,
         isActive: true,
+        canEdit: true,
         phone: true,
         organization: true,
         createdAt: true,
@@ -100,7 +101,7 @@ export async function PUT(
     }
 
     const body = await request.json();
-    const { name, email, password, role, phone, organization } = body;
+    const { name, email, password, role, phone, organization, canEdit } = body;
 
     const existing = await db.user.findUnique({ where: { id } });
     if (!existing) {
@@ -124,6 +125,7 @@ export async function PUT(
 
     // Admin-only fields
     if (isAdmin) {
+      if (canEdit !== undefined) updateData.canEdit = canEdit;
       if (email !== undefined) {
         // Check email uniqueness
         if (email !== existing.email) {
@@ -149,6 +151,7 @@ export async function PUT(
         email: true,
         role: true,
         isActive: true,
+        canEdit: true,
         phone: true,
         organization: true,
         createdAt: true,

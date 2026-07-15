@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, Fragment } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users,
@@ -14,6 +14,7 @@ import {
   Search,
   X,
   Upload,
+  Eye,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -35,6 +36,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Table,
   TableBody,
@@ -104,12 +106,51 @@ const emptyMember: MemberFormData = {
   email: '',
 };
 
-export function ParticipantManager() {
+export function ParticipantManager({ defaultEventId }: { defaultEventId?: string }) {
   const token = useAuthStore((s) => s.token);
+  const currentUser = useAuthStore((s) => s.user);
+  const hasEditRights = currentUser?.role === 'ADMIN' || currentUser?.canEdit === true;
 
   // State
   const [events, setEvents] = useState<AssignedEvent[]>([]);
-  const [selectedEventId, setSelectedEventId] = useState<string>('');
+  const [selectedEventId, setSelectedEventId] = useState<string>(defaultEventId || '');
+
+  useEffect(() => {
+    if (defaultEventId) {
+      setSelectedEventId(defaultEventId);
+    }
+  }, [defaultEventId]);
+
+  const [panels, setPanels] = useState<any[]>([]);
+  const [selectedPanelId, setSelectedPanelId] = useState<string>('');
+
+  const loadPanels = useCallback(async () => {
+    if (!selectedEventId || !token) {
+      setPanels([]);
+      setSelectedPanelId('');
+      return;
+    }
+    try {
+      const res = await fetch(`/api/events/${selectedEventId}/panels`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setPanels(data.data);
+          if (data.data.length > 0 && !data.data.some((p: any) => p.id === selectedPanelId)) {
+            setSelectedPanelId(data.data[0].id);
+          }
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, [selectedEventId, token, selectedPanelId]);
+
+  useEffect(() => {
+    loadPanels();
+  }, [selectedEventId]);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
@@ -126,6 +167,10 @@ export function ParticipantManager() {
   const [editParticipantOpen, setEditParticipantOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [viewTeamOpen, setViewTeamOpen] = useState(false);
+  const [viewingTeam, setViewingTeam] = useState<Team | null>(null);
+  const [selectedTeamIds, setSelectedTeamIds] = useState<string[]>([]);
+  const [selectedParticipantIds, setSelectedParticipantIds] = useState<string[]>([]);
 
   // Form state
   const [teamForm, setTeamForm] = useState({ name: '', college: '' });
@@ -142,7 +187,11 @@ export function ParticipantManager() {
   // Edit targets
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
   const [editingParticipant, setEditingParticipant] = useState<Participant | null>(null);
-  const [deletingItem, setDeletingItem] = useState<{ type: 'team' | 'participant'; id: string; name: string } | null>(null);
+  const [deletingItem, setDeletingItem] = useState<{
+    type: 'team' | 'participant' | 'bulk-teams' | 'bulk-participants';
+    id: string;
+    name: string;
+  } | null>(null);
 
   const selectedEvent = events.find((e) => e.id === selectedEventId);
   const isTeamEvent = selectedEvent?.eventType === 'TEAM';
@@ -157,7 +206,12 @@ export function ParticipantManager() {
         });
         if (res.ok) {
           const data = await res.json();
-          if (data.success) setEvents(data.data);
+          if (data.success) {
+            setEvents(data.data);
+            if (data.data.length === 1) {
+              setSelectedEventId(data.data[0].id);
+            }
+          }
         }
       } catch {
         toast.error('Failed to load events');
@@ -172,12 +226,13 @@ export function ParticipantManager() {
     if (!selectedEventId || !token) return;
     setDataLoading(true);
     try {
+      const panelParam = selectedPanelId ? `&panelId=${selectedPanelId}` : '';
       if (isTeamEvent) {
         const [teamsRes, partsRes] = await Promise.all([
-          fetch(`/api/teams?eventId=${selectedEventId}`, {
+          fetch(`/api/teams?eventId=${selectedEventId}${panelParam}`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch(`/api/participants?eventId=${selectedEventId}`, {
+          fetch(`/api/participants?eventId=${selectedEventId}${panelParam}`, {
             headers: { Authorization: `Bearer ${token}` },
           }),
         ]);
@@ -198,7 +253,7 @@ export function ParticipantManager() {
           }
         }
       } else {
-        const res = await fetch(`/api/participants?eventId=${selectedEventId}`, {
+        const res = await fetch(`/api/participants?eventId=${selectedEventId}${panelParam}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (res.ok) {
@@ -211,18 +266,27 @@ export function ParticipantManager() {
     } finally {
       setDataLoading(false);
     }
-  }, [selectedEventId, token, isTeamEvent]);
+  }, [selectedEventId, selectedPanelId, token, isTeamEvent]);
 
-  // Fetch participants/teams when event changes
+  // Fetch participants/teams when event or panel changes
   useEffect(() => {
     if (!selectedEventId || !token) return;
+    setSelectedTeamIds([]);
+    setSelectedParticipantIds([]);
     fetchEventData();
-  }, [selectedEventId, token, fetchEventData]);
+  }, [selectedEventId, selectedPanelId, token, fetchEventData]);
+
+  // Reset selections when viewMode changes
+  useEffect(() => {
+    setSelectedTeamIds([]);
+    setSelectedParticipantIds([]);
+  }, [viewMode]);
 
   const fetchTeamMembers = async (teamId: string) => {
     if (!token || teamMembers[teamId]) return;
     try {
-      const res = await fetch(`/api/participants?eventId=${selectedEventId}`, {
+      const panelParam = selectedPanelId ? `&panelId=${selectedPanelId}` : '';
+      const res = await fetch(`/api/participants?eventId=${selectedEventId}${panelParam}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -264,6 +328,7 @@ export function ParticipantManager() {
           eventId: selectedEventId,
           name: teamForm.name,
           college: teamForm.college || null,
+          panelId: selectedPanelId || null,
           members: teamMembersForm
             .filter((m) => m.name.trim())
             .map((m) => ({
@@ -342,25 +407,71 @@ export function ParticipantManager() {
     if (!token || !deletingItem) return;
     setSaving(true);
     try {
-      const endpoint =
-        deletingItem.type === 'team'
-          ? `/api/teams/${deletingItem.id}`
-          : `/api/participants/${deletingItem.id}`;
-      const res = await fetch(endpoint, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast.success(
-          `${deletingItem.type === 'team' ? 'Team' : 'Participant'} deleted successfully`
-        );
-        setDeleteDialogOpen(false);
-        setDeletingItem(null);
-        fetchEventData();
-        setTeamMembers({});
+      if (deletingItem.type === 'bulk-teams') {
+        const res = await fetch('/api/teams', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ ids: selectedTeamIds }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          toast.success('Selected teams deleted successfully');
+          setSelectedTeamIds([]);
+          setDeleteDialogOpen(false);
+          setDeletingItem(null);
+          fetchEventData();
+          setTeamMembers({});
+        } else {
+          toast.error(data.error || 'Failed to delete selected teams');
+        }
+      } else if (deletingItem.type === 'bulk-participants') {
+        const res = await fetch('/api/participants', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ ids: selectedParticipantIds }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          toast.success('Selected participants deleted successfully');
+          setSelectedParticipantIds([]);
+          setDeleteDialogOpen(false);
+          setDeletingItem(null);
+          fetchEventData();
+        } else {
+          toast.error(data.error || 'Failed to delete selected participants');
+        }
       } else {
-        toast.error(data.error || 'Failed to delete');
+        const endpoint =
+          deletingItem.type === 'team'
+            ? `/api/teams/${deletingItem.id}`
+            : `/api/participants/${deletingItem.id}`;
+        const res = await fetch(endpoint, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (data.success) {
+          toast.success(
+            `${deletingItem.type === 'team' ? 'Team' : 'Participant'} deleted successfully`
+          );
+          if (deletingItem.type === 'team') {
+            setSelectedTeamIds(selectedTeamIds.filter((id) => id !== deletingItem.id));
+          } else {
+            setSelectedParticipantIds(selectedParticipantIds.filter((id) => id !== deletingItem.id));
+          }
+          setDeleteDialogOpen(false);
+          setDeletingItem(null);
+          fetchEventData();
+          setTeamMembers({});
+        } else {
+          toast.error(data.error || 'Failed to delete');
+        }
       }
     } catch {
       toast.error('Failed to delete');
@@ -386,6 +497,7 @@ export function ParticipantManager() {
         body: JSON.stringify({
           eventId: selectedEventId,
           ...participantForm,
+          panelId: selectedPanelId || null,
         }),
       });
       const data = await res.json();
@@ -453,10 +565,65 @@ export function ParticipantManager() {
     });
   };
 
-  const openEditTeam = (team: Team) => {
+  const openViewTeam = async (team: Team) => {
+    setViewingTeam(team);
+    setViewTeamOpen(true);
+    
+    // Fetch members if not already loaded
+    if (!teamMembers[team.id]) {
+      try {
+        const res = await fetch(`/api/participants?eventId=${selectedEventId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            const members = data.data.filter((p: Participant) => p.teamId === team.id);
+            setTeamMembers((prev) => ({ ...prev, [team.id]: members }));
+          }
+        }
+      } catch {
+        // silent
+      }
+    }
+  };
+
+  const openEditTeam = async (team: Team) => {
     setEditingTeam(team);
     setTeamForm({ name: team.name, college: team.college || '' });
-    setTeamMembersForm([{ ...emptyMember }]);
+    
+    let members = teamMembers[team.id];
+    if (!members) {
+      try {
+        const res = await fetch(`/api/participants?eventId=${selectedEventId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            members = data.data.filter((p: Participant) => p.teamId === team.id);
+            setTeamMembers((prev) => ({ ...prev, [team.id]: members }));
+          }
+        }
+      } catch {
+        // silent
+      }
+    }
+    
+    if (members && members.length > 0) {
+      setTeamMembersForm(
+        members.map((m) => ({
+          name: m.name,
+          registerNumber: m.registerNumber || '',
+          department: m.department || '',
+          college: m.college || '',
+          contactNumber: m.contactNumber || '',
+          email: m.email || '',
+        }))
+      );
+    } else {
+      setTeamMembersForm([{ ...emptyMember }]);
+    }
     setEditTeamOpen(true);
   };
 
@@ -526,43 +693,103 @@ export function ParticipantManager() {
               <CardTitle className="text-lg">Participant Manager</CardTitle>
             </div>
             <div className="flex items-center gap-2">
-              <Select
-                value={selectedEventId}
-                onValueChange={(v) => {
-                  setSelectedEventId(v);
-                  setSearchQuery('');
-                  setExpandedTeamId(null);
-                  setTeamMembers({});
-                }}
-              >
-                <SelectTrigger className="w-[220px]">
-                  <SelectValue placeholder="Select event..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {events.map((event) => (
-                    <SelectItem key={event.id} value={event.id}>
-                      {event.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {selectedEventId && (
-                <Button
-                  onClick={() => {
-                    if (isTeamEvent) {
-                      resetTeamForm();
-                      setAddTeamOpen(true);
-                    } else {
-                      resetParticipantForm();
-                      setAddParticipantOpen(true);
-                    }
+              {events.length > 1 ? (
+                <Select
+                  value={selectedEventId}
+                  onValueChange={(v) => {
+                    setSelectedEventId(v);
+                    setSearchQuery('');
+                    setExpandedTeamId(null);
+                    setTeamMembers({});
                   }}
-                  className="gap-2 bg-emerald-600 hover:bg-emerald-700"
-                  size="sm"
                 >
-                  <Plus className="h-4 w-4" />
-                  Add {isTeamEvent ? 'Team' : 'Participant'}
-                </Button>
+                  <SelectTrigger className="w-[220px]">
+                    <SelectValue placeholder="Select event..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {events.map((event) => (
+                      <SelectItem key={event.id} value={event.id}>
+                        {event.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : selectedEvent ? (
+                <Badge variant="outline" className="text-sm font-semibold px-3 py-1.5 bg-muted/40">
+                  Event: {selectedEvent.name}
+                </Badge>
+              ) : null}
+
+              {selectedEventId && panels.length > 1 && (
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={selectedPanelId}
+                    onValueChange={(v) => {
+                      setSelectedPanelId(v);
+                      setSearchQuery('');
+                      setExpandedTeamId(null);
+                      setTeamMembers({});
+                    }}
+                  >
+                    <SelectTrigger className="w-[180px]">
+                      <SelectValue placeholder="Select panel..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {panels.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {selectedEventId && panels.length === 1 && (
+                <Badge variant="outline" className="text-sm font-semibold px-3 py-1.5 bg-muted/40">
+                  {panels[0].name}
+                </Badge>
+              )}
+              {selectedEventId && hasEditRights && (
+                <div className="flex items-center gap-2">
+                  {((viewMode === 'grouped' && selectedTeamIds.length > 0) ||
+                    (viewMode === 'flat' && selectedParticipantIds.length > 0) ||
+                    (!isTeamEvent && selectedParticipantIds.length > 0)) && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => {
+                        setDeletingItem({
+                          type: viewMode === 'grouped' ? 'bulk-teams' : 'bulk-participants',
+                          id: '',
+                          name: viewMode === 'grouped'
+                            ? `${selectedTeamIds.length} selected teams`
+                            : `${selectedParticipantIds.length} selected participants`,
+                        });
+                        setDeleteDialogOpen(true);
+                      }}
+                      className="gap-2"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete Selected ({viewMode === 'grouped' ? selectedTeamIds.length : selectedParticipantIds.length})
+                    </Button>
+                  )}
+                  <Button
+                    onClick={() => {
+                      if (isTeamEvent) {
+                        resetTeamForm();
+                        setAddTeamOpen(true);
+                      } else {
+                        resetParticipantForm();
+                        setAddParticipantOpen(true);
+                      }
+                    }}
+                    className="gap-2 bg-emerald-600 hover:bg-emerald-700"
+                    size="sm"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add {isTeamEvent ? 'Team' : 'Participant'}
+                  </Button>
+                </div>
               )}
             </div>
           </div>
@@ -648,6 +875,23 @@ export function ParticipantManager() {
                     <TableHeader>
                       <TableRow>
                         <TableHead className="w-8" />
+                        {hasEditRights && (
+                          <TableHead className="w-8">
+                            <Checkbox
+                              checked={
+                                filteredTeams.length > 0 &&
+                                filteredTeams.every((t) => selectedTeamIds.includes(t.id))
+                              }
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  setSelectedTeamIds(filteredTeams.map((t) => t.id));
+                                } else {
+                                  setSelectedTeamIds([]);
+                                }
+                              }}
+                            />
+                          </TableHead>
+                        )}
                         <TableHead>Team Name</TableHead>
                         <TableHead>College</TableHead>
                         <TableHead className="text-center">Members</TableHead>
@@ -657,7 +901,7 @@ export function ParticipantManager() {
                     </TableHeader>
                     <TableBody>
                       {filteredTeams.map((team) => (
-                        <>
+                        <Fragment key={team.id}>
                           <TableRow key={team.id} className="group">
                             <TableCell>
                               <Button
@@ -673,6 +917,20 @@ export function ParticipantManager() {
                                 )}
                               </Button>
                             </TableCell>
+                            {hasEditRights && (
+                              <TableCell>
+                                <Checkbox
+                                  checked={selectedTeamIds.includes(team.id)}
+                                  onCheckedChange={(checked) => {
+                                    if (checked) {
+                                      setSelectedTeamIds([...selectedTeamIds, team.id]);
+                                    } else {
+                                      setSelectedTeamIds(selectedTeamIds.filter((id) => id !== team.id));
+                                    }
+                                  }}
+                                />
+                              </TableCell>
+                            )}
                             <TableCell className="font-medium">{team.name}</TableCell>
                             <TableCell>{team.college || '-'}</TableCell>
                             <TableCell className="text-center">
@@ -687,25 +945,40 @@ export function ParticipantManager() {
                                   variant="ghost"
                                   size="sm"
                                   className="h-7 w-7 p-0"
-                                  onClick={() => openEditTeam(team)}
+                                  onClick={() => openViewTeam(team)}
+                                  title="View Team Details"
                                 >
-                                  <Pencil className="h-3.5 w-3.5" />
+                                  <Eye className="h-3.5 w-3.5" />
                                 </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                                  onClick={() => {
-                                    setDeletingItem({
-                                      type: 'team',
-                                      id: team.id,
-                                      name: team.name,
-                                    });
-                                    setDeleteDialogOpen(true);
-                                  }}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </Button>
+                                {hasEditRights && (
+                                  <>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 w-7 p-0"
+                                      onClick={() => openEditTeam(team)}
+                                      title="Edit Team"
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                                      onClick={() => {
+                                        setDeletingItem({
+                                          type: 'team',
+                                          id: team.id,
+                                          name: team.name,
+                                        });
+                                        setDeleteDialogOpen(true);
+                                      }}
+                                      title="Delete Team"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </>
+                                )}
                               </div>
                             </TableCell>
                           </TableRow>
@@ -719,7 +992,7 @@ export function ParticipantManager() {
                                 exit={{ opacity: 0, height: 0 }}
                                 className="border-0"
                               >
-                                <TableCell colSpan={6} className="bg-muted/30 p-0">
+                                <TableCell colSpan={7} className="bg-muted/30 p-0">
                                   <div className="px-12 py-3">
                                     {teamMembers[team.id] ? (
                                       teamMembers[team.id].length === 0 ? (
@@ -771,7 +1044,7 @@ export function ParticipantManager() {
                               </motion.tr>
                             )}
                           </AnimatePresence>
-                        </>
+                        </Fragment>
                       ))}
                     </TableBody>
                   </Table>
@@ -790,6 +1063,23 @@ export function ParticipantManager() {
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          {hasEditRights && (
+                            <TableHead className="w-8">
+                              <Checkbox
+                                checked={
+                                  filteredParticipants.length > 0 &&
+                                  filteredParticipants.every((p) => selectedParticipantIds.includes(p.id))
+                                }
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    setSelectedParticipantIds(filteredParticipants.map((p) => p.id));
+                                  } else {
+                                    setSelectedParticipantIds([]);
+                                  }
+                                }}
+                              />
+                            </TableHead>
+                          )}
                           <TableHead>Name</TableHead>
                           <TableHead>Team Name</TableHead>
                           <TableHead>Department</TableHead>
@@ -802,6 +1092,20 @@ export function ParticipantManager() {
                       <TableBody>
                         {filteredParticipants.map((p) => (
                           <TableRow key={p.id} className="group">
+                            {hasEditRights && (
+                              <TableCell>
+                                <Checkbox
+                                  checked={selectedParticipantIds.includes(p.id)}
+                                  onCheckedChange={(checked) => {
+                                    if (checked) {
+                                      setSelectedParticipantIds([...selectedParticipantIds, p.id]);
+                                    } else {
+                                      setSelectedParticipantIds(selectedParticipantIds.filter((id) => id !== p.id));
+                                    }
+                                  }}
+                                />
+                              </TableCell>
+                            )}
                             <TableCell className="font-medium">{p.name}</TableCell>
                             <TableCell className="font-medium text-emerald-600 dark:text-emerald-400">
                               {p.team?.name || '-'}
@@ -812,29 +1116,35 @@ export function ParticipantManager() {
                             <TableCell>{p.email || '-'}</TableCell>
                             <TableCell className="text-right">
                               <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 w-7 p-0"
-                                  onClick={() => openEditParticipant(p)}
-                                >
-                                  <Pencil className="h-3.5 w-3.5" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                                  onClick={() => {
-                                    setDeletingItem({
-                                      type: 'participant',
-                                      id: p.id,
-                                      name: p.name,
-                                    });
-                                    setDeleteDialogOpen(true);
-                                  }}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </Button>
+                                {hasEditRights && (
+                                  <>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 w-7 p-0"
+                                      onClick={() => openEditParticipant(p)}
+                                      title="Edit Participant"
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                                      onClick={() => {
+                                        setDeletingItem({
+                                          type: 'participant',
+                                          id: p.id,
+                                          name: p.name,
+                                        });
+                                        setDeleteDialogOpen(true);
+                                      }}
+                                      title="Delete Participant"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </>
+                                )}
                               </div>
                             </TableCell>
                           </TableRow>
@@ -857,6 +1167,23 @@ export function ParticipantManager() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      {hasEditRights && (
+                        <TableHead className="w-8">
+                          <Checkbox
+                            checked={
+                              filteredParticipants.length > 0 &&
+                              filteredParticipants.every((p) => selectedParticipantIds.includes(p.id))
+                            }
+                            onCheckedChange={(checked) => {
+                              if (checked) {
+                                setSelectedParticipantIds(filteredParticipants.map((p) => p.id));
+                              } else {
+                                setSelectedParticipantIds([]);
+                              }
+                            }}
+                          />
+                        </TableHead>
+                      )}
                       <TableHead>Name</TableHead>
                       <TableHead>Department</TableHead>
                       <TableHead>College</TableHead>
@@ -868,6 +1195,20 @@ export function ParticipantManager() {
                   <TableBody>
                     {filteredParticipants.map((p) => (
                       <TableRow key={p.id} className="group">
+                        {hasEditRights && (
+                          <TableCell>
+                            <Checkbox
+                              checked={selectedParticipantIds.includes(p.id)}
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  setSelectedParticipantIds([...selectedParticipantIds, p.id]);
+                                } else {
+                                  setSelectedParticipantIds(selectedParticipantIds.filter((id) => id !== p.id));
+                                }
+                              }}
+                            />
+                          </TableCell>
+                        )}
                         <TableCell className="font-medium">{p.name}</TableCell>
                         <TableCell>{p.department || '-'}</TableCell>
                         <TableCell>{p.college || '-'}</TableCell>
@@ -1291,15 +1632,74 @@ export function ParticipantManager() {
         </DialogContent>
       </Dialog>
 
+      {/* View Team Details Dialog */}
+      <Dialog open={viewTeamOpen} onOpenChange={setViewTeamOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg">
+              <Users className="size-5 text-emerald-600" />
+              Team Details — {viewingTeam?.name}
+            </DialogTitle>
+            <DialogDescription>
+              Registered college: <span className="font-semibold text-foreground">{viewingTeam?.college || '—'}</span>
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+            <h4 className="font-bold text-sm text-foreground">Team Members</h4>
+            {viewingTeam && teamMembers[viewingTeam.id] ? (
+              teamMembers[viewingTeam.id].length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">No members found</p>
+              ) : (
+                <div className="space-y-3">
+                  {teamMembers[viewingTeam.id].map((member) => (
+                    <div key={member.id} className="p-3 border rounded-xl bg-muted/20 space-y-1 text-sm">
+                      <div className="font-semibold text-foreground">{member.name}</div>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                        <div><span className="font-semibold text-foreground">Reg No:</span> {member.registerNumber || '—'}</div>
+                        <div><span className="font-semibold text-foreground">Dept:</span> {member.department || '—'}</div>
+                        <div className="col-span-2"><span className="font-semibold text-foreground">Email:</span> {member.email || '—'}</div>
+                        <div className="col-span-2"><span className="font-semibold text-foreground">Contact:</span> {member.contactNumber || '—'}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground justify-center py-6">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading members...
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button onClick={() => setViewTeamOpen(false)} className="bg-emerald-600 hover:bg-emerald-700">
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Delete Confirmation */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {deletingItem?.type === 'team' ? 'Team' : 'Participant'}</AlertDialogTitle>
+            <AlertDialogTitle>
+              Delete {
+                deletingItem?.type === 'bulk-teams'
+                  ? 'Selected Teams'
+                  : deletingItem?.type === 'bulk-participants'
+                  ? 'Selected Participants'
+                  : deletingItem?.type === 'team'
+                  ? 'Team'
+                  : 'Participant'
+              }
+            </AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete &quot;{deletingItem?.name}&quot;?
-              {deletingItem?.type === 'team' &&
-                ' This will also delete all team members and their evaluations.'}
+              {(deletingItem?.type === 'team' || deletingItem?.type === 'bulk-teams') &&
+                ' This will also delete all associated team members and their evaluations.'}
               This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1315,6 +1715,7 @@ export function ParticipantManager() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
     </div>
   );
 }

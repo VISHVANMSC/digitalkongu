@@ -58,9 +58,12 @@ export async function GET(
       const isAssigned = await db.eventCoordinator.findUnique({
         where: { eventId_userId: { eventId: evaluation.eventId, userId: payload.userId } },
       });
-      if (!isAssigned) {
+      const isPanelAssigned = evaluation.panelId ? await db.panelCoordinator.findFirst({
+        where: { panelId: evaluation.panelId, userId: payload.userId }
+      }) : null;
+      if (!isAssigned && !isPanelAssigned) {
         return NextResponse.json(
-          { success: false, error: 'Forbidden: Not assigned to this event' },
+          { success: false, error: 'Forbidden: Not assigned to this event or panel' },
           { status: 403 }
         );
       }
@@ -115,6 +118,15 @@ export async function PUT(
     if (!isOwner && !isAdmin) {
       return NextResponse.json(
         { success: false, error: 'Forbidden: Can only update own evaluations' },
+        { status: 403 }
+      );
+    }
+
+    // Check evaluation start time
+    const event = await db.event.findUnique({ where: { id: existing.eventId } });
+    if (event?.evaluationStart && new Date() < new Date(event.evaluationStart)) {
+      return NextResponse.json(
+        { success: false, error: 'Evaluation has not started yet. Please wait until the scheduled evaluation time.' },
         { status: 403 }
       );
     }

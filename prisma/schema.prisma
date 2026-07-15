@@ -55,11 +55,14 @@ model User {
   lockedUntil   DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  canEdit       Boolean  @default(false)
 
   coordinatorAssignments EventCoordinator[]
   evaluatorAssignments   EventEvaluator[]
   evaluations            Evaluation[]
   auditLogs              AuditLog[]
+  panelCoordinatorAssignments PanelCoordinator[]
+  panelEvaluatorAssignments   PanelEvaluator[]
 }
 
 model Program {
@@ -87,6 +90,7 @@ model Event {
   evaluationMode EvaluationMode @default(MARKS)
   maxStarRating  Int            @default(5)
   status         EventStatus    @default(ACTIVE)
+  evaluationStart DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -97,6 +101,9 @@ model Event {
   teams        Team[]
   participants Participant[]
   evaluations  Evaluation[]
+  panels       Panel[]
+
+  @@index([programId])
 }
 
 model EvaluationCriteria {
@@ -110,6 +117,8 @@ model EvaluationCriteria {
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
   scores EvaluationScore[]
+
+  @@index([eventId])
 }
 
 model EventCoordinator {
@@ -121,6 +130,7 @@ model EventCoordinator {
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, userId])
+  @@index([userId])
 }
 
 model EventEvaluator {
@@ -132,6 +142,7 @@ model EventEvaluator {
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, userId])
+  @@index([userId])
 }
 
 model Team {
@@ -140,10 +151,15 @@ model Team {
   name      String
   college   String?
   createdAt DateTime @default(now())
+  panelId   String?
 
   event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
   members     Participant[]
   evaluations Evaluation[]
+  panel       Panel?        @relation(fields: [panelId], references: [id], onDelete: SetNull)
+
+  @@index([eventId])
+  @@index([panelId])
 }
 
 model Participant {
@@ -157,10 +173,16 @@ model Participant {
   contactNumber  String?
   email          String?
   createdAt      DateTime @default(now())
+  panelId        String?
 
   event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  team        Team?         @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  team        Team?         @relation(fields: [teamId], references: [id], onDelete: Cascade)
   evaluations Evaluation[]
+  panel       Panel?        @relation(fields: [panelId], references: [id], onDelete: SetNull)
+
+  @@index([eventId])
+  @@index([teamId])
+  @@index([panelId])
 }
 
 model Evaluation {
@@ -175,12 +197,20 @@ model Evaluation {
   submittedAt  DateTime?
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
+  panelId      String?
 
   event       Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
   team        Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
   participant Participant?       @relation(fields: [participantId], references: [id], onDelete: SetNull)
   evaluator   User               @relation(fields: [evaluatorId], references: [id], onDelete: Cascade)
   scores      EvaluationScore[]
+  panel       Panel?             @relation(fields: [panelId], references: [id], onDelete: SetNull)
+
+  @@index([eventId])
+  @@index([teamId])
+  @@index([participantId])
+  @@index([evaluatorId])
+  @@index([panelId])
 }
 
 model EvaluationScore {
@@ -193,6 +223,9 @@ model EvaluationScore {
 
   evaluation Evaluation        @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
   criteria   EvaluationCriteria @relation(fields: [criteriaId], references: [id], onDelete: Cascade)
+
+  @@index([evaluationId])
+  @@index([criteriaId])
 }
 
 model AuditLog {
@@ -206,4 +239,45 @@ model AuditLog {
   createdAt DateTime @default(now())
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model Panel {
+  id        String   @id @default(cuid())
+  eventId   String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event        Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  coordinators PanelCoordinator[]
+  evaluators   PanelEvaluator[]
+  teams        Team[]
+  participants Participant[]
+  evaluations  Evaluation[]
+
+  @@index([eventId])
+}
+
+model PanelCoordinator {
+  id      String @id @default(cuid())
+  panelId String
+  userId  String
+
+  panel Panel @relation(fields: [panelId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([panelId, userId])
+  @@index([userId])
+}
+
+model PanelEvaluator {
+  id      String @id @default(cuid())
+  panelId String
+  userId  String
+
+  panel Panel @relation(fields: [panelId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([panelId, userId])
+  @@index([userId])
 }

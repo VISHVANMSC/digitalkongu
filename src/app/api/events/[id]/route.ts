@@ -39,6 +39,12 @@ export async function GET(
             },
           },
         },
+        panels: {
+          include: {
+            coordinators: { include: { user: { select: { id: true, name: true, email: true } } } },
+            evaluators: { include: { user: { select: { id: true, name: true, email: true } } } },
+          },
+        },
         _count: {
           select: {
             teams: true,
@@ -61,9 +67,12 @@ export async function GET(
       const isAssigned = await db.eventCoordinator.findUnique({
         where: { eventId_userId: { eventId: id, userId: payload.userId } },
       });
-      if (!isAssigned) {
+      const isPanelAssigned = await db.panelCoordinator.findFirst({
+        where: { userId: payload.userId, panel: { eventId: id } },
+      });
+      if (!isAssigned && !isPanelAssigned) {
         return NextResponse.json(
-          { success: false, error: 'Forbidden: Not assigned to this event' },
+          { success: false, error: 'Forbidden: Not assigned to this event or any of its panels' },
           { status: 403 }
         );
       }
@@ -71,9 +80,12 @@ export async function GET(
       const isAssigned = await db.eventEvaluator.findUnique({
         where: { eventId_userId: { eventId: id, userId: payload.userId } },
       });
-      if (!isAssigned) {
+      const isPanelAssigned = await db.panelEvaluator.findFirst({
+        where: { userId: payload.userId, panel: { eventId: id } },
+      });
+      if (!isAssigned && !isPanelAssigned) {
         return NextResponse.json(
-          { success: false, error: 'Forbidden: Not assigned to this event' },
+          { success: false, error: 'Forbidden: Not assigned to this event or any of its panels' },
           { status: 403 }
         );
       }
@@ -119,6 +131,7 @@ export async function PUT(
       description,
       venue,
       eventDate,
+      evaluationStart,
       eventType,
       evaluationMode,
       maxStarRating,
@@ -142,6 +155,7 @@ export async function PUT(
     if (description !== undefined) updateData.description = description;
     if (venue !== undefined) updateData.venue = venue;
     if (eventDate !== undefined) updateData.eventDate = eventDate ? new Date(eventDate) : null;
+    if (evaluationStart !== undefined) updateData.evaluationStart = evaluationStart ? new Date(evaluationStart) : null;
     if (eventType !== undefined) updateData.eventType = eventType;
     if (evaluationMode !== undefined) updateData.evaluationMode = evaluationMode;
     if (maxStarRating !== undefined) updateData.maxStarRating = maxStarRating;
@@ -229,6 +243,12 @@ export async function PUT(
         criteria: { orderBy: { order: 'asc' } },
         coordinators: { include: { user: { select: { id: true, name: true, email: true } } } },
         evaluators: { include: { user: { select: { id: true, name: true, email: true } } } },
+        panels: {
+          include: {
+            coordinators: { include: { user: { select: { id: true, name: true, email: true } } } },
+            evaluators: { include: { user: { select: { id: true, name: true, email: true } } } },
+          },
+        },
       },
     });
 

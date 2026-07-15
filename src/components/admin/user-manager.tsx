@@ -84,6 +84,7 @@ interface UserRow {
   email: string;
   role: 'ADMIN' | 'COORDINATOR' | 'EVALUATOR';
   isActive: boolean;
+  canEdit: boolean;
   phone: string | null;
   organization: string | null;
   createdAt: string;
@@ -129,6 +130,7 @@ export function UserManager() {
     role: 'EVALUATOR' as 'ADMIN' | 'COORDINATOR' | 'EVALUATOR',
     phone: '',
     organization: '',
+    canEdit: false,
   });
 
   // Edit form
@@ -139,6 +141,7 @@ export function UserManager() {
     phone: '',
     organization: '',
     isActive: true,
+    canEdit: false,
   });
 
   // Reset password form
@@ -171,6 +174,7 @@ export function UserManager() {
       role: 'EVALUATOR',
       phone: '',
       organization: '',
+      canEdit: false,
     });
   };
 
@@ -183,6 +187,7 @@ export function UserManager() {
       phone: user.phone || '',
       organization: user.organization || '',
       isActive: user.isActive,
+      canEdit: user.canEdit || false,
     });
     setEditDialogOpen(true);
   };
@@ -207,6 +212,7 @@ export function UserManager() {
           role: createForm.role,
           phone: createForm.phone.trim() || undefined,
           organization: createForm.organization.trim() || undefined,
+          canEdit: createForm.canEdit,
         }),
       });
       const data = await res.json();
@@ -239,6 +245,7 @@ export function UserManager() {
         email: editForm.email.trim(),
         phone: editForm.phone.trim() || null,
         organization: editForm.organization.trim() || null,
+        canEdit: editForm.canEdit,
       };
       // Only admin can change role (but not for self)
       if (!isSelf) {
@@ -903,6 +910,22 @@ export function UserManager() {
                 />
               </div>
             </div>
+            {createForm.role === 'COORDINATOR' && (
+              <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/20">
+                <div>
+                  <Label className="text-sm font-medium">Participant Editing Rights</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Allow coordinator to view and edit entire team & participant details.
+                  </p>
+                </div>
+                <Switch
+                  checked={createForm.canEdit}
+                  onCheckedChange={(checked) =>
+                    setCreateForm({ ...createForm, canEdit: checked })
+                  }
+                />
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button
@@ -1017,6 +1040,22 @@ export function UserManager() {
                 disabled={editingUser?.id === currentUser?.id}
               />
             </div>
+            {editForm.role === 'COORDINATOR' && (
+              <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/20">
+                <div>
+                  <Label className="text-sm font-medium">Participant Editing Rights</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Allow coordinator to view and edit entire team & participant details.
+                  </p>
+                </div>
+                <Switch
+                  checked={editForm.canEdit}
+                  onCheckedChange={(checked) =>
+                    setEditForm({ ...editForm, canEdit: checked })
+                  }
+                />
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button

@@ -2,8 +2,17 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { db } from './db';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'eventforge-secret-key-2026';
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'eventforge-refresh-secret-2026';
+const isProduction = process.env.NODE_ENV === 'production';
+const hasCustomSecret = process.env.JWT_SECRET && process.env.JWT_SECRET !== 'digitalkongu-secret-key-2026';
+const hasCustomRefresh = process.env.JWT_REFRESH_SECRET && process.env.JWT_REFRESH_SECRET !== 'digitalkongu-refresh-secret-2026';
+
+if (isProduction && (!hasCustomSecret || !hasCustomRefresh)) {
+  console.error('❌ PRODUCTION SECURITY VULNERABILITY: You must configure secure and custom JWT_SECRET and JWT_REFRESH_SECRET environment variables in production mode!');
+  throw new Error('PRODUCTION SECURITY ERROR: Custom JWT_SECRET and JWT_REFRESH_SECRET are required in production.');
+}
+
+const JWT_SECRET = process.env.JWT_SECRET || 'digitalkongu-secret-key-2026';
+const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'digitalkongu-refresh-secret-2026';
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCK_TIME_MINUTES = 30;
 

@@ -23,6 +23,194 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const contentType = request.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const body = await request.json();
+      const { eventId, type, item, panelId, action } = body;
+
+      if (action === 'clear') {
+        if (!eventId) {
+          return NextResponse.json(
+            { success: false, error: 'Event ID is required to clear data' },
+            { status: 400 }
+          );
+        }
+
+        // Verify event exists
+        const event = await db.event.findUnique({ where: { id: eventId } });
+        if (!event || event.status === 'DELETED') {
+          return NextResponse.json(
+            { success: false, error: 'Event not found' },
+            { status: 404 }
+          );
+        }
+
+        // Coordinator must be assigned to the event
+        if (isCoordinator && !isAdmin) {
+          const isAssigned = await db.eventCoordinator.findUnique({
+            where: { eventId_userId: { eventId, userId: payload.userId } },
+          });
+          if (!isAssigned) {
+            return NextResponse.json(
+              { success: false, error: 'Forbidden: Not assigned to this event' },
+              { status: 403 }
+            );
+          }
+        }
+
+        // Delete evaluations, teams, participants
+        await db.evaluation.deleteMany({ where: { eventId } });
+        await db.team.deleteMany({ where: { eventId } });
+        await db.participant.deleteMany({ where: { eventId } });
+
+        await db.auditLog.create({
+          data: {
+            userId: payload.userId,
+            action: 'CLEAR_EVENT_DATA',
+            entity: 'Event',
+            entityId: eventId,
+            details: `Cleared all teams, participants, and evaluations for event ${eventId} before bulk upload`,
+          },
+        });
+
+        return NextResponse.json({ success: true, message: 'Event data cleared successfully' });
+      }
+
+      if (!eventId || !type || !item) {
+        return NextResponse.json(
+          { success: false, error: 'Event ID, type, and item are required' },
+          { status: 400 }
+        );
+      }
+
+      // Verify event exists
+      const event = await db.event.findUnique({ where: { id: eventId } });
+      if (!event || event.status === 'DELETED') {
+        return NextResponse.json(
+          { success: false, error: 'Event not found' },
+          { status: 404 }
+        );
+      }
+
+      // Coordinator must be assigned to the event
+      if (isCoordinator && !isAdmin) {
+        const isAssigned = await db.eventCoordinator.findUnique({
+          where: { eventId_userId: { eventId, userId: payload.userId } },
+        });
+        if (!isAssigned) {
+          return NextResponse.json(
+            { success: false, error: 'Forbidden: Not assigned to this event' },
+            { status: 403 }
+          );
+        }
+      }
+
+      let statusMsg = '';
+      let createdTeamId: string | null = null;
+      const createdParticipantIds: string[] = [];
+
+      if (type === 'TEAM') {
+        const teamName = item.name;
+        const members = item.members || [];
+
+        let team = await db.team.findFirst({
+          where: { 
+            eventId, 
+            name: { equals: teamName, mode: 'insensitive' },
+            panelId: panelId || null
+          },
+        });
+
+        const isNew = !team;
+        if (!team) {
+          team = await db.team.create({
+            data: {
+              eventId,
+              name: teamName,
+              college: members[0]?.college || null,
+              panelId: panelId || null,
+            },
+          });
+          createdTeamId = team.id;
+        }
+
+        let addedCount = 0;
+        let existCount = 0;
+        for (const m of members) {
+          const existingMember = await db.participant.findFirst({
+            where: {
+              eventId,
+              name: m.name,
+              teamId: team.id,
+              panelId: panelId || null,
+            },
+          });
+
+          if (!existingMember) {
+            const newMember = await db.participant.create({
+              data: {
+                eventId,
+                teamId: team.id,
+                name: m.name,
+                registerNumber: m.registerNumber,
+                department: m.department,
+                college: m.college || team.college || null,
+                contactNumber: m.contactNumber,
+                email: m.email,
+                panelId: panelId || null,
+              },
+            });
+            createdParticipantIds.push(newMember.id);
+            addedCount++;
+          } else {
+            existCount++;
+          }
+        }
+
+        statusMsg = isNew 
+          ? `Team "${teamName}" created with ${addedCount} members`
+          : `Team "${teamName}" updated: ${addedCount} new members added, ${existCount} already exist`;
+      } else {
+        // Individual participant
+        const participantName = item.name;
+        const existingParticipant = await db.participant.findFirst({
+          where: {
+            eventId,
+            name: participantName,
+            panelId: panelId || null,
+          },
+        });
+
+        if (!existingParticipant) {
+          const newMember = await db.participant.create({
+            data: {
+              eventId,
+              name: participantName,
+              registerNumber: item.registerNumber,
+              department: item.department,
+              college: item.college,
+              contactNumber: item.contactNumber,
+              email: item.email,
+              panelId: panelId || null,
+            },
+          });
+          createdParticipantIds.push(newMember.id);
+          statusMsg = `Participant "${participantName}" created`;
+        } else {
+          statusMsg = `Participant "${participantName}" already exists`;
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        data: { 
+          statusMsg,
+          createdTeamId,
+          createdParticipantIds
+        },
+      });
+    }
+
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     const eventId = formData.get('eventId') as string | null;
@@ -143,43 +331,58 @@ export async function POST(request: NextRequest) {
       });
       const existingTeamNames = new Set(existingTeams.map((t) => t.name.toLowerCase()));
 
-      // Create teams and members
+      // Create/update teams and members
       for (const [teamName, members] of teamMap) {
         try {
-          if (existingTeamNames.has(teamName.toLowerCase())) {
-            results.errorCount++;
-            results.errors.push({
-              row: 0,
-              message: `Team "${teamName}" already exists in this event`,
+          let team = await db.team.findFirst({
+            where: { eventId, name: { equals: teamName, mode: 'insensitive' } },
+          });
+
+          if (!team) {
+            team = await db.team.create({
+              data: {
+                eventId,
+                name: teamName,
+                college: members[0].college || null,
+              },
             });
-            continue;
           }
 
-          const team = await db.team.create({
-            data: {
-              eventId,
-              name: teamName,
-              college: members[0].college || null,
-              members: {
-                create: members.map((m) => ({
+          // Add members to the team
+          for (const m of members) {
+            // Check if member already exists in this team
+            const existingMember = await db.participant.findFirst({
+              where: {
+                eventId,
+                name: m.name,
+                teamId: team.id,
+              },
+            });
+
+            if (!existingMember) {
+              await db.participant.create({
+                data: {
                   eventId,
+                  teamId: team.id,
                   name: m.name,
                   registerNumber: m.registerNumber,
                   department: m.department,
-                  college: m.college,
+                  college: m.college || team.college || null,
                   contactNumber: m.contactNumber,
                   email: m.email,
-                })),
-              },
-            },
-          });
-
-          results.successCount += members.length;
+                },
+              });
+              results.successCount++;
+            } else {
+              // Member already exists, skip without error
+              results.successCount++;
+            }
+          }
         } catch (error) {
           results.errorCount += members.length;
           results.errors.push({
             row: 0,
-            message: `Failed to create team "${teamName}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+            message: `Failed to process team "${teamName}": ${error instanceof Error ? error.message : 'Unknown error'}`,
           });
         }
       }

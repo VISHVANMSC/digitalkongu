@@ -43,6 +43,11 @@ interface AssignedEvent {
     id: string;
     name: string;
   };
+  panels?: Array<{
+    id: string;
+    name: string;
+    coordinators: Array<{ userId: string }>;
+  }>;
 }
 
 const statCards = [
@@ -98,6 +103,7 @@ const itemVariants = {
 
 export function CoordinatorDashboard() {
   const token = useAuthStore((s) => s.token);
+  const user = useAuthStore((s) => s.user);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [events, setEvents] = useState<AssignedEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -236,7 +242,14 @@ export function CoordinatorDashboard() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <h4 className="truncate text-sm font-medium">{event.name}</h4>
+                        <h4 className="truncate text-sm font-medium">
+                          {event.name}
+                          {event.panels && event.panels.some(p => p.coordinators.some(c => c.userId === user?.id)) && (
+                            <span className="text-emerald-600 dark:text-emerald-400 font-bold ml-1">
+                              ({event.panels.filter(p => p.coordinators.some(c => c.userId === user?.id)).map(p => p.name).join(', ')})
+                            </span>
+                          )}
+                        </h4>
                         <Badge
                           variant={event.eventType === 'TEAM' ? 'default' : 'secondary'}
                           className="shrink-0 text-xs"
@@ -260,7 +273,7 @@ export function CoordinatorDashboard() {
                         {event.program.name}
                         {event.venue ? ` · ${event.venue}` : ''}
                         {event.eventDate
-                          ? ` · ${new Date(event.eventDate).toLocaleDateString()}`
+                          ? ` · ${new Date(event.eventDate).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}`
                           : ''}
                       </p>
                     </div>

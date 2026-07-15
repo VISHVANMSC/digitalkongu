@@ -35,6 +35,7 @@ export async function GET(request: NextRequest) {
         email: true,
         role: true,
         isActive: true,
+        canEdit: true,
         phone: true,
         organization: true,
         createdAt: true,
@@ -81,7 +82,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { name, email, password, role, phone, organization } = body;
+    const { name, email, password, role, phone, organization, canEdit } = body;
 
     if (!name || !email || !password) {
       return NextResponse.json(
@@ -109,6 +110,7 @@ export async function POST(request: NextRequest) {
         role: role || 'EVALUATOR',
         phone: phone || null,
         organization: organization || null,
+        canEdit: canEdit || false,
       },
       select: {
         id: true,
@@ -116,6 +118,7 @@ export async function POST(request: NextRequest) {
         email: true,
         role: true,
         isActive: true,
+        canEdit: true,
         phone: true,
         organization: true,
         createdAt: true,
