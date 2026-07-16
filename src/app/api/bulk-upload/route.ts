@@ -45,33 +45,56 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        // Coordinator must be assigned to the event
+        // Coordinator must be assigned to the event or the panel
         if (isCoordinator && !isAdmin) {
           const isAssigned = await db.eventCoordinator.findUnique({
             where: { eventId_userId: { eventId, userId: payload.userId } },
           });
-          if (!isAssigned) {
+          let isPanelAssigned = false;
+          if (panelId) {
+            const pa = await db.panelCoordinator.findUnique({
+              where: { panelId_userId: { panelId, userId: payload.userId } },
+            });
+            isPanelAssigned = !!pa;
+          }
+          if (!isAssigned && !isPanelAssigned) {
             return NextResponse.json(
-              { success: false, error: 'Forbidden: Not assigned to this event' },
+              { success: false, error: 'Forbidden: Not assigned to this event or panel' },
               { status: 403 }
             );
           }
         }
 
         // Delete evaluations, teams, participants
-        await db.evaluation.deleteMany({ where: { eventId } });
-        await db.team.deleteMany({ where: { eventId } });
-        await db.participant.deleteMany({ where: { eventId } });
+        if (panelId) {
+          await db.evaluation.deleteMany({ where: { eventId, panelId } });
+          await db.team.deleteMany({ where: { eventId, panelId } });
+          await db.participant.deleteMany({ where: { eventId, panelId } });
 
-        await db.auditLog.create({
-          data: {
-            userId: payload.userId,
-            action: 'CLEAR_EVENT_DATA',
-            entity: 'Event',
-            entityId: eventId,
-            details: `Cleared all teams, participants, and evaluations for event ${eventId} before bulk upload`,
-          },
-        });
+          await db.auditLog.create({
+            data: {
+              userId: payload.userId,
+              action: 'CLEAR_PANEL_DATA',
+              entity: 'Panel',
+              entityId: panelId,
+              details: `Cleared all teams, participants, and evaluations for panel ${panelId} in event ${eventId} before bulk upload`,
+            },
+          });
+        } else {
+          await db.evaluation.deleteMany({ where: { eventId } });
+          await db.team.deleteMany({ where: { eventId } });
+          await db.participant.deleteMany({ where: { eventId } });
+
+          await db.auditLog.create({
+            data: {
+              userId: payload.userId,
+              action: 'CLEAR_EVENT_DATA',
+              entity: 'Event',
+              entityId: eventId,
+              details: `Cleared all teams, participants, and evaluations for event ${eventId} before bulk upload`,
+            },
+          });
+        }
 
         return NextResponse.json({ success: true, message: 'Event data cleared successfully' });
       }
@@ -92,14 +115,21 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Coordinator must be assigned to the event
+      // Coordinator must be assigned to the event or the panel
       if (isCoordinator && !isAdmin) {
         const isAssigned = await db.eventCoordinator.findUnique({
           where: { eventId_userId: { eventId, userId: payload.userId } },
         });
-        if (!isAssigned) {
+        let isPanelAssigned = false;
+        if (panelId) {
+          const pa = await db.panelCoordinator.findUnique({
+            where: { panelId_userId: { panelId, userId: payload.userId } },
+          });
+          isPanelAssigned = !!pa;
+        }
+        if (!isAssigned && !isPanelAssigned) {
           return NextResponse.json(
-            { success: false, error: 'Forbidden: Not assigned to this event' },
+            { success: false, error: 'Forbidden: Not assigned to this event or panel' },
             { status: 403 }
           );
         }

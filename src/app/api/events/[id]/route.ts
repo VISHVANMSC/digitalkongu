@@ -16,6 +16,9 @@ export async function GET(
     }
 
     const { id } = await params;
+    const { searchParams } = new URL(request.url);
+    const panelId = searchParams.get('panelId');
+
     const event = await db.event.findUnique({
       where: { id },
       include: {
@@ -91,9 +94,26 @@ export async function GET(
       }
     }
 
+    let finalEvent: any = event;
+    if (panelId) {
+      const [teams, participants, evaluations] = await Promise.all([
+        db.team.count({ where: { eventId: id, panelId } }),
+        db.participant.count({ where: { eventId: id, panelId } }),
+        db.evaluation.count({ where: { eventId: id, panelId } }),
+      ]);
+      finalEvent = {
+        ...event,
+        _count: {
+          teams,
+          participants,
+          evaluations,
+        },
+      };
+    }
+
     return NextResponse.json({
       success: true,
-      data: event,
+      data: finalEvent,
     });
   } catch (error) {
     console.error('Get event error:', error);

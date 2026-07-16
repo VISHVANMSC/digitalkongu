@@ -256,7 +256,7 @@ export function BulkUpload({ defaultEventId }: { defaultEventId?: string }) {
     setCurrentStatus('Checking event status...');
 
     try {
-      const checkRes = await fetch(`/api/events/${selectedEventId}`, {
+      const checkRes = await fetch(`/api/events/${selectedEventId}${selectedPanelId ? `?panelId=${selectedPanelId}` : ''}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (checkRes.ok) {
@@ -304,6 +304,7 @@ export function BulkUpload({ defaultEventId }: { defaultEventId?: string }) {
           body: JSON.stringify({
             eventId: selectedEventId,
             action: 'clear',
+            panelId: selectedPanelId || undefined,
           }),
         });
         if (!clearRes.ok) {
@@ -483,6 +484,7 @@ export function BulkUpload({ defaultEventId }: { defaultEventId?: string }) {
         errorCount,
         errors: errorsList,
       });
+      loadPanels();
 
     } catch (error) {
       console.error(error);
