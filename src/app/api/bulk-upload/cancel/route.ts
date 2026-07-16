@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequest } from '@/lib/auth';
+import { authenticateRequest, requireRole } from '@/lib/auth';
 import { db } from '@/lib/db';
 
 export async function POST(request: NextRequest) {
@@ -12,8 +12,77 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const isAdmin = requireRole('ADMIN')(payload);
+    const isCoordinator = requireRole('COORDINATOR')(payload);
+
+    if (!isAdmin && !isCoordinator) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden: Admin or Coordinator access required' },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
     const { teamIds, participantIds } = body;
+
+    if (isCoordinator && !isAdmin) {
+      const dbUser = await db.user.findUnique({
+        where: { id: payload.userId },
+        select: { canEdit: true },
+      });
+      if (!dbUser || !dbUser.canEdit) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden: Coordinator does not have editing rights' },
+          { status: 403 }
+        );
+      }
+
+      // Verify coordinator is assigned to the events/panels associated with the teams
+      if (teamIds && Array.isArray(teamIds) && teamIds.length > 0) {
+        const teams = await db.team.findMany({
+          where: { id: { in: teamIds } },
+          select: { eventId: true },
+        });
+        for (const team of teams) {
+          const isAssigned = await db.eventCoordinator.findUnique({
+            where: { eventId_userId: { eventId: team.eventId, userId: payload.userId } },
+          });
+          const panelAssignments = await db.panelCoordinator.findMany({
+            where: { userId: payload.userId, panel: { eventId: team.eventId } },
+            select: { panelId: true },
+          });
+          if (!isAssigned && panelAssignments.length === 0) {
+            return NextResponse.json(
+              { success: false, error: 'Forbidden: Not assigned to the event of these teams' },
+              { status: 403 }
+            );
+          }
+        }
+      }
+
+      // Verify coordinator is assigned to the events/panels associated with the participants
+      if (participantIds && Array.isArray(participantIds) && participantIds.length > 0) {
+        const participants = await db.participant.findMany({
+          where: { id: { in: participantIds } },
+          select: { eventId: true },
+        });
+        for (const part of participants) {
+          const isAssigned = await db.eventCoordinator.findUnique({
+            where: { eventId_userId: { eventId: part.eventId, userId: payload.userId } },
+          });
+          const panelAssignments = await db.panelCoordinator.findMany({
+            where: { userId: payload.userId, panel: { eventId: part.eventId } },
+            select: { panelId: true },
+          });
+          if (!isAssigned && panelAssignments.length === 0) {
+            return NextResponse.json(
+              { success: false, error: 'Forbidden: Not assigned to the event of these participants' },
+              { status: 403 }
+            );
+          }
+        }
+      }
+    }
 
     // Delete all participants and teams in the arrays
     if (participantIds && Array.isArray(participantIds) && participantIds.length > 0) {

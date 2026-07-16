@@ -301,6 +301,29 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
+    // Verify coordinator is assigned to the events associated with these teams
+    if (isCoordinator && !isAdmin) {
+      const teams = await db.team.findMany({
+        where: { id: { in: ids } },
+        select: { eventId: true },
+      });
+      for (const team of teams) {
+        const isAssigned = await db.eventCoordinator.findUnique({
+          where: { eventId_userId: { eventId: team.eventId, userId: payload.userId } },
+        });
+        const panelAssignments = await db.panelCoordinator.findMany({
+          where: { userId: payload.userId, panel: { eventId: team.eventId } },
+          select: { panelId: true },
+        });
+        if (!isAssigned && panelAssignments.length === 0) {
+          return NextResponse.json(
+            { success: false, error: 'Forbidden: Not assigned to the event of these teams' },
+            { status: 403 }
+          );
+        }
+      }
+    }
+
     // Delete teams (cascade deletes members and evaluations)
     await db.team.deleteMany({
       where: {

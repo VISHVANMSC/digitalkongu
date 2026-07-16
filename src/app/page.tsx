@@ -244,7 +244,7 @@ function LoginPage() {
 }
 
 function AppShell() {
-  const { user, isAuthenticated, logout } = useAuthStore();
+  const { user, isAuthenticated, logout, updateUser } = useAuthStore();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { isDark, toggleTheme } = useTheme();
   const [adminTab, setAdminTab] = useState<AdminTab>('dashboard');
@@ -256,6 +256,26 @@ function AppShell() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [eventsLoading, setEventsLoading] = useState<boolean>(false);
   const token = useAuthStore((s) => s.token);
+
+  useEffect(() => {
+    if (!isAuthenticated || !token) return;
+    async function refreshProfile() {
+      try {
+        const res = await fetch('/api/auth/me', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.data) {
+            updateUser(data.data);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to refresh user profile:', err);
+      }
+    }
+    refreshProfile();
+  }, [isAuthenticated, token, updateUser]);
   const role = user?.role || 'ADMIN';
 
   useEffect(() => {

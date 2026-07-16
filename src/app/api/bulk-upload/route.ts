@@ -45,8 +45,19 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        // Coordinator must be assigned to the event or the panel
+        // Coordinator must be assigned to the event or the panel, and have editing rights
         if (isCoordinator && !isAdmin) {
+          const dbUser = await db.user.findUnique({
+            where: { id: payload.userId },
+            select: { canEdit: true },
+          });
+          if (!dbUser || !dbUser.canEdit) {
+            return NextResponse.json(
+              { success: false, error: 'Forbidden: Coordinator does not have editing rights' },
+              { status: 403 }
+            );
+          }
+
           const isAssigned = await db.eventCoordinator.findUnique({
             where: { eventId_userId: { eventId, userId: payload.userId } },
           });
@@ -56,10 +67,16 @@ export async function POST(request: NextRequest) {
               where: { panelId_userId: { panelId, userId: payload.userId } },
             });
             isPanelAssigned = !!pa;
+          } else {
+            const panelAssignments = await db.panelCoordinator.findMany({
+              where: { userId: payload.userId, panel: { eventId } },
+              select: { panelId: true },
+            });
+            isPanelAssigned = panelAssignments.length > 0;
           }
           if (!isAssigned && !isPanelAssigned) {
             return NextResponse.json(
-              { success: false, error: 'Forbidden: Not assigned to this event or panel' },
+              { success: false, error: 'Forbidden: Not assigned to this event or its panels' },
               { status: 403 }
             );
           }
@@ -115,8 +132,19 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Coordinator must be assigned to the event or the panel
+      // Coordinator must be assigned to the event or the panel, and have editing rights
       if (isCoordinator && !isAdmin) {
+        const dbUser = await db.user.findUnique({
+          where: { id: payload.userId },
+          select: { canEdit: true },
+        });
+        if (!dbUser || !dbUser.canEdit) {
+          return NextResponse.json(
+            { success: false, error: 'Forbidden: Coordinator does not have editing rights' },
+            { status: 403 }
+          );
+        }
+
         const isAssigned = await db.eventCoordinator.findUnique({
           where: { eventId_userId: { eventId, userId: payload.userId } },
         });
@@ -126,10 +154,16 @@ export async function POST(request: NextRequest) {
             where: { panelId_userId: { panelId, userId: payload.userId } },
           });
           isPanelAssigned = !!pa;
+        } else {
+          const panelAssignments = await db.panelCoordinator.findMany({
+            where: { userId: payload.userId, panel: { eventId } },
+            select: { panelId: true },
+          });
+          isPanelAssigned = panelAssignments.length > 0;
         }
         if (!isAssigned && !isPanelAssigned) {
           return NextResponse.json(
-            { success: false, error: 'Forbidden: Not assigned to this event or panel' },
+            { success: false, error: 'Forbidden: Not assigned to this event or its panels' },
             { status: 403 }
           );
         }
@@ -268,14 +302,39 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Coordinator must be assigned to the event
+    // Coordinator must be assigned to the event or its panels, and have editing rights
     if (isCoordinator && !isAdmin) {
+      const dbUser = await db.user.findUnique({
+        where: { id: payload.userId },
+        select: { canEdit: true },
+      });
+      if (!dbUser || !dbUser.canEdit) {
+        return NextResponse.json(
+          { success: false, error: 'Forbidden: Coordinator does not have editing rights' },
+          { status: 403 }
+        );
+      }
+
       const isAssigned = await db.eventCoordinator.findUnique({
         where: { eventId_userId: { eventId, userId: payload.userId } },
       });
-      if (!isAssigned) {
+      const panelId = formData.get('panelId') as string | null;
+      let isPanelAssigned = false;
+      if (panelId) {
+        const pa = await db.panelCoordinator.findUnique({
+          where: { panelId_userId: { panelId, userId: payload.userId } },
+        });
+        isPanelAssigned = !!pa;
+      } else {
+        const panelAssignments = await db.panelCoordinator.findMany({
+          where: { userId: payload.userId, panel: { eventId } },
+          select: { panelId: true },
+        });
+        isPanelAssigned = panelAssignments.length > 0;
+      }
+      if (!isAssigned && !isPanelAssigned) {
         return NextResponse.json(
-          { success: false, error: 'Forbidden: Not assigned to this event' },
+          { success: false, error: 'Forbidden: Not assigned to this event or its panels' },
           { status: 403 }
         );
       }

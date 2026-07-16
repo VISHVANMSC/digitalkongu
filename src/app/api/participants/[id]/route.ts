@@ -34,7 +34,7 @@ export async function PUT(
       );
     }
 
-    // Coordinator must be assigned to the event
+    // Coordinator must be assigned to the event or its panels
     if (isCoordinator && !isAdmin) {
       const dbUser = await db.user.findUnique({
         where: { id: payload.userId },
@@ -50,9 +50,13 @@ export async function PUT(
       const isAssigned = await db.eventCoordinator.findUnique({
         where: { eventId_userId: { eventId: existing.eventId, userId: payload.userId } },
       });
-      if (!isAssigned) {
+      const panelAssignments = await db.panelCoordinator.findMany({
+        where: { userId: payload.userId, panel: { eventId: existing.eventId } },
+        select: { panelId: true },
+      });
+      if (!isAssigned && panelAssignments.length === 0) {
         return NextResponse.json(
-          { success: false, error: 'Forbidden: Not assigned to this event' },
+          { success: false, error: 'Forbidden: Not assigned to this event or its panels' },
           { status: 403 }
         );
       }
@@ -121,7 +125,7 @@ export async function DELETE(
       );
     }
 
-    // Coordinator must be assigned to the event
+    // Coordinator must be assigned to the event or its panels
     if (isCoordinator && !isAdmin) {
       const dbUser = await db.user.findUnique({
         where: { id: payload.userId },
@@ -137,9 +141,13 @@ export async function DELETE(
       const isAssigned = await db.eventCoordinator.findUnique({
         where: { eventId_userId: { eventId: existing.eventId, userId: payload.userId } },
       });
-      if (!isAssigned) {
+      const panelAssignments = await db.panelCoordinator.findMany({
+        where: { userId: payload.userId, panel: { eventId: existing.eventId } },
+        select: { panelId: true },
+      });
+      if (!isAssigned && panelAssignments.length === 0) {
         return NextResponse.json(
-          { success: false, error: 'Forbidden: Not assigned to this event' },
+          { success: false, error: 'Forbidden: Not assigned to this event or its panels' },
           { status: 403 }
         );
       }

@@ -24,6 +24,7 @@ export async function GET(request: NextRequest) {
         organization: true,
         createdAt: true,
         updatedAt: true,
+        canEdit: true,
         coordinatorAssignments: {
           select: { eventId: true },
         },

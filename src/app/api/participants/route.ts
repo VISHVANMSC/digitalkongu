@@ -287,6 +287,29 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
+    // Verify coordinator is assigned to the events associated with these participants
+    if (isCoordinator && !isAdmin) {
+      const participants = await db.participant.findMany({
+        where: { id: { in: ids } },
+        select: { eventId: true },
+      });
+      for (const part of participants) {
+        const isAssigned = await db.eventCoordinator.findUnique({
+          where: { eventId_userId: { eventId: part.eventId, userId: payload.userId } },
+        });
+        const panelAssignments = await db.panelCoordinator.findMany({
+          where: { userId: payload.userId, panel: { eventId: part.eventId } },
+          select: { panelId: true },
+        });
+        if (!isAssigned && panelAssignments.length === 0) {
+          return NextResponse.json(
+            { success: false, error: 'Forbidden: Not assigned to the event of these participants' },
+            { status: 403 }
+          );
+        }
+      }
+    }
+
     await db.participant.deleteMany({
       where: {
         id: { in: ids },
