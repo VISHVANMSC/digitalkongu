@@ -172,8 +172,8 @@ export function ProgramManager() {
         name: formName.trim(),
         description: formDescription.trim() || undefined,
         venue: formVenue.trim() || undefined,
-        startDate: formStartDate || undefined,
-        endDate: formEndDate || undefined,
+        startDate: formStartDate ? new Date(formStartDate).toISOString() : undefined,
+        endDate: formEndDate ? new Date(formEndDate).toISOString() : undefined,
       };
 
       const url = editingProgram ? `/api/programs/${editingProgram.id}` : '/api/programs';
